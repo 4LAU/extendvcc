@@ -1,0 +1,89 @@
+{
+  "title": "",
+  "category": "CREDIT_CARD",
+  "sections": [
+    {
+      "id": "details",
+      "label": "Additional Details"
+    },
+    {
+      "id": "contactInfo",
+      "label": "Contact Information"
+    }
+  ],
+  "fields": [
+    {
+      "id": "notesPlain",
+      "type": "STRING",
+      "purpose": "NOTES",
+      "label": "notesPlain",
+      "value": ""
+    },
+    {
+      "id": "cardholder",
+      "type": "STRING",
+      "label": "cardholder name",
+      "value": ""
+    },
+    {
+      "id": "type",
+      "type": "CREDIT_CARD_TYPE",
+      "label": "type",
+      "value": ""
+    },
+    {
+      "id": "ccnum",
+      "type": "CREDIT_CARD_NUMBER",
+      "label": "number",
+      "value": ""
+    },
+    {
+      "id": "cvv",
+      "type": "CONCEALED",
+      "label": "verification number",
+      "value": ""
+    },
+    {
+      "id": "expiry",
+      "type": "MONTH_YEAR",
+      "label": "expiry date",
+      "value": ""
+    },
+    {
+      "id": "validFrom",
+      "type": "MONTH_YEAR",
+      "label": "valid from",
+      "value": ""
+    },
+    {
+      "id": "bank",
+      "section": {
+        "id": "contactInfo",
+        "label": "Contact Information"
+      },
+      "type": "STRING",
+      "label": "issuing bank",
+      "value": ""
+    },
+    {
+      "id": "pin",
+      "section": {
+        "id": "details",
+        "label": "Additional Details"
+      },
+      "type": "CONCEALED",
+      "label": "PIN",
+      "value": ""
+    },
+    {
+      "id": "creditLimit",
+      "section": {
+        "id": "details",
+        "label": "Additional Details"
+      },
+      "type": "STRING",
+      "label": "credit limit",
+      "value": ""
+    }
+  ]
+}
