@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -73,6 +74,21 @@ def test_append_writes_card_record(monkeypatch, tmp_path):
     assert row["record_type"] == "card"
     assert row["card_id"] == "vc_1"
     assert _read_rows(ledger_path) == [row]
+
+    configure_paths()
+
+
+def test_ledger_file_created_owner_only(monkeypatch, tmp_path):
+    # Invariant: the JSONL ledger is owner-only (0600) from its very first write,
+    # so a world-readable umask cannot leak the local card audit trail.
+    ledger_path = _patch_ledger_path(monkeypatch, tmp_path)
+    old_umask = os.umask(0o022)  # typical umask -> would otherwise yield 0644
+    try:
+        ledger.record_pending("create", "Service-Account-001")
+        assert ledger_path.exists()
+        assert oct(os.stat(ledger_path).st_mode & 0o777) == "0o600"
+    finally:
+        os.umask(old_umask)
 
     configure_paths()
 
