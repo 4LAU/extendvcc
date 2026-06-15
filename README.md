@@ -139,18 +139,22 @@ creds = reveal_card("card_id_here")
 
 See `extendvcc.__init__` for the full list of exported functions and models.
 
-## Security Notes
+## Testing
 
-- The ledger never stores PAN or CVC data.
-- `reveal` saves credentials with `0600` file permissions.
-- Session tokens are stored locally with restricted permissions.
-- All HTTP uses Chrome TLS fingerprinting via `impit`.
+The `pytest` suite runs entirely offline against fakes — it never touches the network.
 
 ### Release smoke test
 
 Before tagging a release, run the live smoke test against a real account to confirm
 the tool still agrees with Extend's API: see [docs/smoke-testing.md](docs/smoke-testing.md).
 The offline `pytest` suite never touches the network; this is the layer that does.
+
+## Security Notes
+
+- The ledger never stores PAN or CVC data.
+- `reveal` saves credentials with `0600` file permissions.
+- Session tokens are stored locally with restricted permissions.
+- All HTTP uses Chrome TLS fingerprinting via `impit`.
 
 ## License
 
