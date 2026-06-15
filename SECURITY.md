@@ -5,9 +5,9 @@
 The following are in scope for vulnerability reports:
 
 - Authentication and session handling (Cognito SRP, token storage, device remembering)
-- Credential exposure — API tokens, IMAP passwords, session files
-- Card data exposure — PAN, CVC, expiry leaking outside of the `reveal` code path
-- Permission issues — session or state files created with overly permissive modes
+- Credential exposure: API tokens, IMAP passwords, session files
+- Card data exposure: PAN, CVC, expiry leaking outside of the `reveal` code path
+- Permission issues: session or state files created with overly permissive modes
 - Dependency vulnerabilities with a realistic exploit path against this package
 
 Out of scope: Extend's own API security, issues requiring physical access to the machine, and theoretical issues with no practical impact.
@@ -28,13 +28,13 @@ You will receive an acknowledgment within 72 hours. Fixes for confirmed vulnerab
 
 ## What This Package Protects
 
-**Credentials** — Extend email/password and IMAP credentials are accepted via env vars or interactive prompt. They are never written to disk.
+**Credentials:** Extend email/password and IMAP credentials are accepted via env vars or interactive prompt. They are never written to disk.
 
-**Session tokens** — Cognito tokens and device credentials are persisted to the state directory with `0600` file permissions (owner read/write only).
+**Session tokens:** Cognito tokens and device credentials are persisted to the state directory with `0600` file permissions (owner read/write only).
 
-**Card data** — The JSONL audit ledger never stores PAN or CVC. The `reveal` command writes full credentials to disk only when `--json-path` is explicitly passed, and the file is created with `0600` permissions.
+**Card data:** The JSONL audit ledger never stores PAN or CVC. The `reveal` command writes full credentials to disk only when `--json-path` is explicitly passed, and the file is created with `0600` permissions.
 
-**Kill switch** — The HTTP client monitors for account-risk signals (403 responses, WAF blocks, verification prompts) and disables itself to reduce the risk of account suspension from runaway automation.
+**Kill switch:** The HTTP client monitors for account-risk signals (403 responses, WAF blocks, verification prompts) and disables itself to reduce the risk of account suspension from runaway automation.
 
 ## Responsible Disclosure
 

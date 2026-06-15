@@ -17,7 +17,7 @@ ruff check src/ tests/
 pytest tests/ -v
 ```
 
-All tests run offline — no real API calls are made.
+All tests run offline; no real API calls are made.
 
 ## Pre-commit
 

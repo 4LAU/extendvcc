@@ -2,7 +2,7 @@
 
 Test what fails silently. Delete everything else.
 
-Every test must answer: _"Without this test, a change could ship that [X] and nobody would know until production."_ If X produces a visible crash, traceback, or HTTP error — the app is the test. Delete it.
+Every test must answer: _"Without this test, a change could ship that [X] and nobody would know until production."_ If X produces a visible crash, traceback, or HTTP error, the app is the test. Delete it.
 
 ---
 
@@ -16,11 +16,11 @@ Every test must answer: _"Without this test, a change could ship that [X] and no
 
 Three gates, in order. If any gate passes, do not write the test:
 
-1. **Would this failure produce a visible signal?** Crash, traceback, exception, empty output — all visible. Don't write the test.
+1. **Would this failure produce a visible signal?** Crash, traceback, exception, empty output: all visible. Don't write the test.
 2. **Does Python or the type system already enforce this?** Type hints, dataclass validation, enum constraints. Don't write the test.
 3. **Is there already a test covering this seam?** Search first. Don't duplicate.
 
-If all three gates fail — the failure would be **silent** — write the test.
+If all three gates fail, meaning the failure would be **silent**, write the test.
 
 ---
 
@@ -28,26 +28,26 @@ If all three gates fail — the failure would be **silent** — write the test.
 
 | Pattern | Why it's silent |
 |---------|-----------------|
-| Wrong card data | Balances, limits, dates that look plausible but are wrong — financial exposure |
+| Wrong card data | Balances, limits, dates that look plausible but are wrong: financial exposure |
 | Silent credential leak | Card numbers or CVCs appearing in logs, error messages, or serialized output |
-| Token refresh race | Concurrent CLI invocations corrupt session state — both get invalid tokens silently |
+| Token refresh race | Concurrent CLI invocations corrupt session state; both get invalid tokens silently |
 | Auth state machine | Login/refresh/re-login transitions that silently lose the session or skip OTP |
 | Idempotence | Retrying a card creation produces duplicates with no visible error |
 | Wire contracts | Extend API response shape changes that silently drop fields or misparse amounts |
-| OTP extraction | IMAP parser returns wrong or stale code — login succeeds with wrong account |
-| Amount/currency math | Cent-to-dollar conversion, balance arithmetic — wrong values look plausible |
-| Ledger corruption | Concurrent writes corrupt the JSONL file — pending mutations vanish silently |
+| OTP extraction | IMAP parser returns wrong or stale code; login succeeds with wrong account |
+| Amount/currency math | Cent-to-dollar conversion, balance arithmetic: wrong values look plausible |
+| Ledger corruption | Concurrent writes corrupt the JSONL file; pending mutations vanish silently |
 
 ---
 
 ## What to Delete
 
-- **Happy paths whose failure is visible** — API call fails → CLI crashes
-- **Shape/type assertions** — `assert x is not None` as primary assertion
-- **Guard rejections** — input validation that raises is visible
-- **Wiring tests** — mock 2+ layers to verify A calls B
-- **CLI output formatting** — tested by looking at it
-- **Third-party library behavior** — don't test that impit works
+- **Happy paths whose failure is visible:** API call fails → CLI crashes
+- **Shape/type assertions:** `assert x is not None` as primary assertion
+- **Guard rejections:** input validation that raises is visible
+- **Wiring tests:** mock 2+ layers to verify A calls B
+- **CLI output formatting:** tested by looking at it
+- **Third-party library behavior:** don't test that impit works
 
 ---
 

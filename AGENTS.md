@@ -1,4 +1,4 @@
-# AGENTS.md — Contributor Guide
+# AGENTS.md: Contributor Guide
 
 Tool-agnostic guide for AI agents and human contributors. For Claude Code specifics, see `CLAUDE.md`.
 
@@ -6,7 +6,7 @@ Tool-agnostic guide for AI agents and human contributors. For Claude Code specif
 
 ## Project Overview
 
-`extendvcc` is an unofficial Python client and CLI for Extend's private virtual card API (`api.paywithextend.com`). It handles Cognito SRP authentication with device remembering and email OTP, the full virtual-card lifecycle (create, list, update, cancel, close, reveal), parent credit-card enrollment, and a JSONL audit ledger for all card mutations. HTTP uses `impit` for Chrome TLS fingerprinting — required because Extend blocks non-browser TLS profiles.
+`extendvcc` is an unofficial Python client and CLI for Extend's private virtual card API (`api.paywithextend.com`). It handles Cognito SRP authentication with device remembering and email OTP, the full virtual-card lifecycle (create, list, update, cancel, close, reveal), parent credit-card enrollment, and a JSONL audit ledger for all card mutations. HTTP uses `impit` for Chrome TLS fingerprinting, which is necessary because Extend blocks non-browser TLS profiles.
 
 ---
 
@@ -44,8 +44,8 @@ src/extendvcc/
 
 ## Coding Style
 
-- **HTTP:** All network requests go through `impit` with Chrome TLS fingerprinting. Never import `httpx` or `requests` directly — Extend detects and blocks non-browser TLS profiles.
-- **Paths:** Use `_paths.py` helpers (`state_dir()`, `ledger_path()`). Never compute paths at module level — always resolve lazily so CLI flags and env vars take effect.
+- **HTTP:** All network requests go through `impit` with Chrome TLS fingerprinting. Never import `httpx` or `requests` directly; Extend detects and blocks non-browser TLS profiles.
+- **Paths:** Use `_paths.py` helpers (`state_dir()`, `ledger_path()`). Never compute paths at module level. Always resolve lazily so CLI flags and env vars take effect.
 - **Functions:** One function at a time, max ~30 lines. Search existing code before adding anything new.
 - **Logging:** Never log or print card numbers, CVCs, or full tokens. Mask to last 4 digits when logging is necessary.
 - **Tests:** All tests run offline with fakes. Mock only at the I/O boundary (HTTP client, filesystem, IMAP). See `docs/testing-policy.md`.
@@ -88,8 +88,8 @@ Scope is optional. Keep the subject line under 72 characters.
 
 ## Security Rules
 
-- **Never store or log PAN/CVC** — the ledger never persists card numbers or CVCs. Mask to last 4 when logging.
-- **Never make real Extend API calls in tests** — all tests run offline with fakes. Network access in tests is not skipped; it is deleted.
-- **Never commit session files, credential caches, or `.env*` files** — these contain live auth tokens.
+- **Never store or log PAN/CVC:** the ledger never persists card numbers or CVCs. Mask to last 4 when logging.
+- **Never make real Extend API calls in tests:** all tests run offline with fakes. Network access in tests is not skipped; it is deleted.
+- **Never commit session files, credential caches, or `.env*` files:** these contain live auth tokens.
 - **Credentials via env vars:** `EXTENDVCC_EMAIL`, `EXTENDVCC_PASSWORD`, `EXTENDVCC_IMAP_*`. Interactive prompts in CLI. No hardcoded credentials anywhere.
 - Session and state files are written with `0600` permissions. The HTTP client has a kill switch that disables itself on risk signals (403, WAF blocks, verification prompts).

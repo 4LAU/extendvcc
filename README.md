@@ -12,7 +12,7 @@ Unofficial CLI and Python client for the Extend virtual card API.
 > This is an unofficial, independent client for Extend's private browser
 > API (`api.paywithextend.com`). It is not affiliated with, endorsed by, or
 > supported by Extend, Inc. Use at your own risk. Your Extend account may be
-> suspended for using automation against their private API.
+> suspended for running automation against their private API.
 
 ## Install
 
@@ -94,7 +94,7 @@ the human-readable plan goes to **stderr**. So `extendvcc create ... --dry-run >
 captures just the JSON. `create`/`bulk` resolve the recipient locally (from `--recipient`,
 else the saved session) and never call the API; the preview is labelled `approximate`
 when the recipient falls back to a placeholder. `update --dry-run` performs only the
-read-only GET needed to show the accurate merged PUT body — no mutation.
+read-only GET needed to show the accurate merged PUT body, with no mutation.
 
 ## Exit Codes
 

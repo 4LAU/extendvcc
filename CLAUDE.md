@@ -8,8 +8,8 @@ Unofficial Python client and CLI for Extend's private virtual card API.
 
 ## Critical Rules
 
-1. **NEVER expose secrets** — card numbers, CVCs, API tokens, session files, PII. If exposed: STOP and rotate immediately.
-2. **NEVER use `git add .`** — add files individually. gitleaks pre-commit enforces this.
+1. **NEVER expose secrets:** card numbers, CVCs, API tokens, session files, PII. If exposed: STOP and rotate immediately.
+2. **NEVER use `git add .`:** add files individually. gitleaks pre-commit enforces this.
 3. **NEVER log or print card numbers, CVCs, or full tokens.** Mask to last 4 digits when logging is necessary.
 4. **NEVER make real Extend API calls in tests.** All tests run offline with fakes.
 5. **NEVER commit session files, credential caches, or `.env*` files.**
@@ -35,7 +35,7 @@ All three clean before claiming done.
 
 **Generation:** Search existing code first. One function at a time (max 30 lines).
 
-**impit:** All HTTP goes through `impit` with Chrome TLS fingerprinting. Never use bare `httpx` or `requests` — Extend fingerprints non-browser clients.
+**impit:** All HTTP goes through `impit` with Chrome TLS fingerprinting. Never use bare `httpx` or `requests`; Extend fingerprints non-browser clients.
 
 **Credentials:** Env vars (`EXTENDVCC_EMAIL`, `EXTENDVCC_PASSWORD`, `EXTENDVCC_IMAP_*`). Interactive prompts in CLI. No 1Password integration in this package.
 
