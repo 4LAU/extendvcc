@@ -207,6 +207,22 @@ def test_authenticate_handles_password_otp_and_device_registration(tmp_path, mon
     configure_paths()
 
 
+def test_device_verifier_pads_negative_salt_and_verifier() -> None:
+    """Cognito decodes Salt/PasswordVerifier as signed big-endian ints; a high bit must be
+    0x00-padded so neither is negative. Regression for the ConfirmDevice 400
+    'Found negative value for salt or password verifier'."""
+    salt = b"\x80" + b"\x11" * 15  # high bit set -> negative without padding
+    verifier_b64, salt_b64 = auth._generate_device_verifier("grp", "devkey", "pw", salt=salt)
+    salt_bytes = base64.b64decode(salt_b64)
+    verifier_bytes = base64.b64decode(verifier_b64)
+    # High bit clear (first byte < 0x80) keeps Cognito's signed decode non-negative.
+    assert salt_bytes[0] < 0x80
+    assert verifier_bytes[0] < 0x80
+    # The sign-fixed salt is the original 16 bytes with a 0x00 prepended, and that same
+    # salt is what gets sent (so it matches the value used in the x-hash).
+    assert salt_bytes == b"\x00" + salt
+
+
 def test_authenticate_handles_remembered_device_srp(tmp_path, monkeypatch) -> None:
     configure_paths(state_dir=tmp_path)
     auth.save_session(

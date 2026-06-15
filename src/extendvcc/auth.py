@@ -150,7 +150,20 @@ def _raise_for_status(resp: Any, *, kind: str = "auth", path: str | None = None)
             status_code=status_code,
             path=path or "",
         )
-    raise PayWithExtendAuthError(f"PayWithExtend Cognito request failed with status {status_code}")
+    # Cognito error responses carry {"__type": "...", "message": "..."} — surface
+    # it so a 400 distinguishes a wrong/expired code from a real flow bug. The body
+    # holds only Cognito's own error type/message, no secrets.
+    detail = ""
+    try:
+        body = _response_json(resp)
+        if isinstance(body, dict):
+            err_type = str(body.get("__type", "")).rsplit("#", 1)[-1]
+            message = body.get("message") or body.get("Message") or ""
+            detail = " - ".join(part for part in (err_type, message) if part)
+    except Exception:
+        detail = ""
+    suffix = f" ({detail})" if detail else ""
+    raise PayWithExtendAuthError(f"PayWithExtend Cognito request failed with status {status_code}{suffix}")
 
 
 def _inspect_account_risk(resp: Any, path: str) -> None:
@@ -282,12 +295,6 @@ def _pad_hex(value: int | str) -> str:
 
 def _hex_to_int(value: str) -> int:
     return int(value, 16)
-
-
-def _int_to_bytes(value: int) -> bytes:
-    if value == 0:
-        return b"\x00"
-    return value.to_bytes((value.bit_length() + 7) // 8, "big")
 
 
 def _hex_to_bytes(value: int | str) -> bytes:
@@ -454,11 +461,17 @@ def _generate_device_verifier(
     salt: bytes | None = None,
 ) -> tuple[str, str]:
     salt_bytes = salt or secrets.token_bytes(16)
+    # Cognito decodes Salt and PasswordVerifier as signed big-endian integers, so a
+    # leading high bit is read as negative ("Found negative value for salt or password
+    # verifier") and ConfirmDevice 400s. Prepend a 0x00 byte when needed via
+    # _hex_to_bytes/_pad_hex, and use the SAME sign-fixed salt for both the x-hash and
+    # the wire value so they stay consistent.
+    salt_bytes = _hex_to_bytes(salt_bytes.hex())
     device_username = f"{device_group_key}{device_key}"
     x_value = _calculate_x(salt_bytes.hex(), device_username, device_password)
     verifier = pow(G, x_value, N)
     return (
-        base64.b64encode(_int_to_bytes(verifier)).decode("ascii"),
+        base64.b64encode(_hex_to_bytes(verifier)).decode("ascii"),
         base64.b64encode(salt_bytes).decode("ascii"),
     )
 
