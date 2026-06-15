@@ -13,6 +13,17 @@ dependencies = [
     "impit>=0.12.0",
     "filelock>=3.0",
 ]
+authors = [{name = "4LAU"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Typing :: Typed",
+]
+keywords = ["extend", "virtual-card", "fintech", "cli"]
 
 [project.optional-dependencies]
 dev = [
@@ -23,6 +34,12 @@ dev = [
 
 [project.scripts]
 extendvcc = "extendvcc.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/4LAU/extendvcc"
+Repository = "https://github.com/4LAU/extendvcc"
+Issues = "https://github.com/4LAU/extendvcc/issues"
+Changelog = "https://github.com/4LAU/extendvcc/blob/main/CHANGELOG.md"
 
 [tool.ruff]
 target-version = "py311"

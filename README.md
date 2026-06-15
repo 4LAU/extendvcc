@@ -1,5 +1,9 @@
 # extendvcc
 
+[![CI](https://github.com/4LAU/extendvcc/actions/workflows/ci.yml/badge.svg)](https://github.com/4LAU/extendvcc/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://pypi.org/project/extendvcc/)
+
 Unofficial CLI and Python client for the Extend virtual card API.
 
 > **Disclaimer**
@@ -57,12 +61,14 @@ extendvcc create \
 ## Reveal Credentials
 
 ```bash
-# Show masked card number and CVC
+# Show masked card number and CVC on stdout
 extendvcc reveal <card-id>
 
-# Save full credentials to a file (0600 permissions)
-extendvcc reveal <card-id> --json creds.json
+# Write full credentials to a file with 0600 permissions (owner-only)
+extendvcc reveal <card-id> --json-path creds.json
 ```
+
+`--json-path` writes the full PAN, CVC, and expiry to a file. Without it, the card number is masked on stdout. `--json` is a separate global flag that controls JSON output format; it does not write a file.
 
 ## Environment Variables
 
