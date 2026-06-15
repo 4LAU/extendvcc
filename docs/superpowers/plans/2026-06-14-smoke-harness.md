@@ -260,6 +260,7 @@ class Harness:
         self._clock = clock
         self.results: list[StepResult] = []
         self._created: list[str] = []
+        self._closed: set[str] = set()  # cards the lifecycle already tore down (mark_closed)
 
     def step(self, name: str, fn: Callable[[], None]) -> None:
         start = self._clock()
@@ -291,7 +292,7 @@ git commit -m "feat(smoke): add step runner with timing and result recording"
 - Modify: `scripts/smoke_test.py`
 - Modify: `tests/test_smoke.py`
 
-Every created card id is registered. `cleanup()` cancels then closes each one, collecting any failures. Failures are reported via an injected `warn` callback and returned so the caller can force a non-zero exit. Cleanup never raises.
+Every created card id is registered. `cleanup()` cancels then closes each one that is **not already torn down**, collecting any failures. The lifecycle's own `close` step marks its card closed (via `mark_closed`) so cleanup does not re-cancel/re-close an already-CLOSED card on the happy path — the live API may reject cancel/close on a closed card with a 4xx, which would turn a passing run into a false "leftover" failure. Cards that were created but never closed (mid-walk failure) are still torn down. Failures are reported via an injected `warn` callback and returned so the caller can force a non-zero exit. Cleanup never raises.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -314,6 +315,22 @@ def test_cleanup_cancels_and_closes_every_created_card():
         ("cancel", "vc_1"), ("close", "vc_1"),
         ("cancel", "vc_2"), ("close", "vc_2"),
     ]
+
+
+def test_cleanup_skips_cards_already_marked_closed():
+    # The lifecycle's own close step marks the card closed; cleanup must not
+    # re-cancel/re-close it (the live API may 4xx on a closed card).
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_done")
+    h.mark_closed("vc_done")
+    calls = []
+    leftovers = h.cleanup(
+        cancel=lambda cid: calls.append(("cancel", cid)),
+        close=lambda cid: calls.append(("close", cid)),
+        warn=lambda msg: calls.append(("warn", msg)),
+    )
+    assert leftovers == []
+    assert calls == []  # already torn down by the lifecycle close step
 
 
 def test_cleanup_reports_leftover_when_close_fails():
@@ -346,6 +363,10 @@ Expected: FAIL (`register_created` / `cleanup` not defined).
     def register_created(self, card_id: str) -> None:
         self._created.append(card_id)
 
+    def mark_closed(self, card_id: str) -> None:
+        """Record that a card was already torn down by the lifecycle close step."""
+        self._closed.add(card_id)
+
     def cleanup(
         self,
         *,
@@ -355,6 +376,8 @@ Expected: FAIL (`register_created` / `cleanup` not defined).
     ) -> list[tuple[str, str]]:
         leftovers: list[tuple[str, str]] = []
         for card_id in self._created:
+            if card_id in self._closed:
+                continue  # lifecycle already cancelled+closed this one; don't re-hit the live API
             try:
                 cancel(card_id)
                 close(card_id)
@@ -386,28 +409,38 @@ git commit -m "feat(smoke): guarantee created-card cleanup with leftover reporti
 - Modify: `scripts/smoke_test.py`
 - Modify: `tests/test_smoke.py`
 
-Reuses the package exit-code constants. A leftover card is the most serious outcome (`EXIT_ERROR`); a failed step is `EXIT_API_ERROR`; all-pass with clean cleanup is `EXIT_OK`.
+Reuses the package exit-code constants. A leftover card is the most serious outcome (`EXIT_ERROR`); all-pass with clean cleanup is `EXIT_OK`. For a failed step, the exit code reflects *why* it failed, mirroring the CLI's own mapping so a non-technical operator is pointed in the right direction: a kill-switch / disabled error is `EXIT_DISABLED`, an auth/session/OTP failure is `EXIT_AUTH_REQUIRED`, an Extend API error is `EXIT_API_ERROR`, and any other precondition/library error is `EXIT_ERROR`. The terminating exception is passed into `exit_code()` so it can classify; if no exception was captured but a step still failed, it defaults to `EXIT_API_ERROR`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_smoke.py — append
 from extendvcc import _exit_codes
+from extendvcc.auth import SessionNotFound
+from extendvcc.client import PayWithExtendDisabled
 
 
 def test_exit_code_ok_when_all_pass_and_no_leftovers():
     results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", True, 0.2)]
-    assert smoke.exit_code(results, leftovers=[]) == _exit_codes.EXIT_OK
+    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_OK
 
 
-def test_exit_code_api_error_on_failed_step():
+def test_exit_code_api_error_on_failed_step_without_known_error():
     results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", False, 0.2, "boom")]
-    assert smoke.exit_code(results, leftovers=[]) == _exit_codes.EXIT_API_ERROR
+    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_API_ERROR
+
+
+def test_exit_code_maps_known_exceptions():
+    results = [smoke.StepResult("a", False, 0.1, "boom")]
+    assert smoke.exit_code(results, leftovers=[], error=PayWithExtendDisabled("x")) == _exit_codes.EXIT_DISABLED
+    assert smoke.exit_code(results, leftovers=[], error=SessionNotFound("x")) == _exit_codes.EXIT_AUTH_REQUIRED
+    assert smoke.exit_code(results, leftovers=[], error=ValueError("x")) == _exit_codes.EXIT_ERROR
 
 
 def test_exit_code_error_when_leftover_card():
     results = [smoke.StepResult("a", True, 0.1)]
-    assert smoke.exit_code(results, leftovers=[("vc_x", "err")]) == _exit_codes.EXIT_ERROR
+    # a leftover card outranks everything else
+    assert smoke.exit_code(results, leftovers=[("vc_x", "err")], error=None) == _exit_codes.EXIT_ERROR
 
 
 def test_format_summary_counts_and_marks():
@@ -424,8 +457,10 @@ def test_json_report_redacts_and_lists_cards():
     assert report["planned"] == 3
     assert report["created"] == ["vc_1"]
     assert report["leftovers"] == []
-    # never serialize raw card data
-    assert "vcn" not in repr(report) and "securityCode" not in repr(report)
+    # never serialize raw card data (real reveal keys are number/cvc/securityCode/vcn)
+    blob = repr(report)
+    assert "number" not in blob and "cvc" not in blob
+    assert "vcn" not in blob and "securityCode" not in blob
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -438,14 +473,33 @@ Expected: FAIL (`exit_code` not defined).
 ```python
 # scripts/smoke_test.py — append
 import sys
+
 from extendvcc import _exit_codes
+from extendvcc.auth import PayWithExtendAuthError
+from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled
 
 
-def exit_code(results: list[StepResult], *, leftovers: list[tuple[str, str]]) -> int:
+def exit_code(
+    results: list[StepResult],
+    *,
+    leftovers: list[tuple[str, str]],
+    error: BaseException | None,
+) -> int:
+    # A leftover (un-closed) card is the most serious outcome — money may be at risk.
     if leftovers:
         return _exit_codes.EXIT_ERROR
-    if all(r.passed for r in results):
+    if all(r.passed for r in results) and error is None:
         return _exit_codes.EXIT_OK
+    # A step failed: classify by the terminating exception so the operator is
+    # pointed at the real cause (mirrors the CLI's exception->exit-code mapping).
+    if isinstance(error, PayWithExtendDisabled):
+        return _exit_codes.EXIT_DISABLED
+    if isinstance(error, PayWithExtendAuthError):
+        return _exit_codes.EXIT_AUTH_REQUIRED
+    if isinstance(error, PayWithExtendAPIError):
+        return _exit_codes.EXIT_API_ERROR
+    if error is not None:
+        return _exit_codes.EXIT_ERROR
     return _exit_codes.EXIT_API_ERROR
 
 
@@ -510,14 +564,16 @@ git commit -m "feat(smoke): add summary, JSON report, and exit-code selection"
 def test_parse_args_defaults():
     ns = smoke.parse_args([])
     assert ns.yes is False
+    assert ns.login is False
     assert ns.parent is None
     assert ns.bulk == 0
     assert ns.json is False
 
 
 def test_parse_args_all_flags():
-    ns = smoke.parse_args(["--yes", "--parent", "cc_123", "--bulk", "3", "--json"])
+    ns = smoke.parse_args(["--yes", "--login", "--parent", "cc_123", "--bulk", "3", "--json"])
     assert ns.yes is True
+    assert ns.login is True
     assert ns.parent == "cc_123"
     assert ns.bulk == 3
     assert ns.json is True
@@ -556,6 +612,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Live smoke test against the REAL Extend API. Creates and closes a $110.01 card.",
     )
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Force a full cold login (auth.setup) first, exercising the first-login/OTP path "
+        "instead of reusing a saved session. Needs EXTENDVCC_EMAIL/PASSWORD/IMAP_*.",
+    )
     parser.add_argument("--parent", default=None, help="Parent credit-card id (default: first active)")
     parser.add_argument("--bulk", type=int, default=0, help="Also create/close K cards via the bulk path")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report")
@@ -598,7 +660,8 @@ from extendvcc.models import CardStatus, CreditCard
 
 
 def _cc(cid, status):
-    return CreditCard(id=cid, status=status, display_name=f"card-{cid}")
+    # CreditCard is frozen+slots with required fields: id, last4, status, display_name
+    return CreditCard(id=cid, last4="1111", status=status, display_name=f"card-{cid}")
 
 
 def test_select_parent_prefers_explicit_when_present():
@@ -689,7 +752,19 @@ from extendvcc.models import CardStatus, Issuer, VirtualCard
 
 
 def _vcard(cid, name, status=CardStatus.ACTIVE):
-    return VirtualCard(id=cid, name=name, status=status, balance_cents=11001, valid_to=_date(2026, 6, 20))
+    # VirtualCard is frozen+slots; ALL fields are required (no defaults). Supply every one.
+    return VirtualCard(
+        id=cid,
+        credit_card_id="cc_1",
+        name=name,
+        last4="4242",
+        status=status,
+        balance_cents=11001,
+        valid_from=_date(2026, 6, 14),
+        valid_to=_date(2026, 6, 20),
+        notes=None,
+        created_at=None,
+    )
 
 
 class _FakeCards:
@@ -705,7 +780,7 @@ class _FakeCards:
 
     def list_issuers(self, *, client=None):
         self.calls.append(("list_issuers",))
-        return [Issuer(id="iss_1", name="Issuer One")]
+        return [Issuer(id="iss_1", name="Issuer One", code="ISS1")]  # Issuer requires id, name, code
 
     def list_credit_cards(self, *, client=None):
         self.calls.append(("list_credit_cards",))
@@ -729,7 +804,8 @@ class _FakeCards:
 
     def reveal_card(self, card_id, *, client=None):
         self.calls.append(("reveal_card", card_id))
-        return {"vcn": "4242424242424242", "securityCode": "123", "expires": "2028-09", "last4": "4242"}
+        # Real reveal_card() returns {"number","cvc","last4","expires"} (see cards.py)
+        return {"number": "4242424242424242", "cvc": "123", "expires": "2028-09", "last4": "4242"}
 
     def update_card(self, card_id, *, name=None, client=None, **kw):
         self.calls.append(("update_card", card_id, name))
@@ -787,8 +863,8 @@ def test_run_lifecycle_reveal_rejects_invalid_card_data(monkeypatch):
 
     fake = _FakeCards()
     fake.reveal_card = lambda card_id, client=None: {
-        "vcn": "4242424242424241",  # bad Luhn
-        "securityCode": "123",
+        "number": "4242424242424241",  # bad Luhn
+        "cvc": "123",
         "expires": "2028-09",
         "last4": "4241",
     }
@@ -827,6 +903,7 @@ from extendvcc.cards import (
     cancel_card,
     close_card,
     create_card,
+    create_cards_bulk,
     get_card,
     list_cards,
     list_credit_cards,
@@ -868,10 +945,10 @@ def run_lifecycle(harness: Harness, *, parent_id: str | None, today: date) -> No
             raise SmokeError("created card not present in list_cards()")
 
     def _reveal():
-        creds = reveal_card(state["card_id"])
-        if not luhn_valid(creds["vcn"]):
+        creds = reveal_card(state["card_id"])  # returns {"number","cvc","last4","expires"}
+        if not luhn_valid(creds["number"]):
             raise SmokeError("revealed PAN failed Luhn check")
-        if not cvc_valid(creds["securityCode"]):
+        if not cvc_valid(creds["cvc"]):
             raise SmokeError("revealed CVC is not 3-4 digits")
         if not expiry_in_future(creds.get("expires") or "", today):
             raise SmokeError("revealed expiry is not in the future")
@@ -898,6 +975,7 @@ def run_lifecycle(harness: Harness, *, parent_id: str | None, today: date) -> No
         card = close_card(state["card_id"])
         if card.status != CardStatus.CLOSED:
             raise SmokeError(f"close left status {card.status}")
+        harness.mark_closed(state["card_id"])  # so cleanup won't re-cancel/re-close it
 
     harness.step("accounts", _accounts)
     harness.step("issuers", _issuers)
@@ -931,7 +1009,7 @@ git commit -m "feat(smoke): add live lifecycle orchestration with offline covera
 - Modify: `scripts/smoke_test.py`
 - Modify: `tests/test_smoke.py`
 
-`main()` ties it together: parse args, print the live-account warning, confirm, run the walk inside a `try`, always run cleanup in `finally`, print the summary (or JSON), and return the right exit code. The `auth` step is the very first thing: it calls `account_context()` which forces a real authenticated request (loading or refreshing the session). The bulk option, when `--bulk K > 0`, runs after the lifecycle and registers each bulk card for cleanup.
+`main()` ties it together: parse args, print the live-account warning, confirm, run the walk inside a `try`, always run cleanup in `finally`, print the summary (or JSON), and return the right exit code. When `--login` is passed, an explicit `login` step runs `auth.setup()` first to exercise the cold first-login/OTP path; otherwise the `accounts` step's `account_context()` only **refreshes** an existing session (it raises `SessionNotFound` if none exists — it does not cold-login). The bulk option, when `--bulk K > 0`, runs after the lifecycle and registers each bulk card for cleanup. On a failed walk, `main()` remembers the terminating exception so the exit code can classify it (auth/disabled/API/generic) rather than always reporting an API error.
 
 `main()` is tested offline by patching the card functions and feeding `--yes` so no prompt or network occurs; we assert the exit code and that cleanup ran.
 
@@ -967,7 +1045,9 @@ def test_main_aborts_when_not_confirmed(monkeypatch):
     _patch_cards(monkeypatch, fake)
     monkeypatch.setattr(smoke, "_read_confirm", lambda: "no")
     rc = smoke.main([])
-    assert rc == _exit_codes.EXIT_OK  # clean, deliberate abort
+    # A skipped run must NOT look like a passed run: aborting returns EXIT_ERROR,
+    # matching the package's documented "aborted confirm" code. (See _exit_codes.py.)
+    assert rc == _exit_codes.EXIT_ERROR
     assert not any(c[0] == "create_card" for c in fake.calls)
 ```
 
@@ -982,6 +1062,8 @@ Expected: FAIL (`main` not defined).
 # scripts/smoke_test.py — append
 import json as _json
 import time
+
+from extendvcc import auth  # for the optional --login cold-login path
 
 _monotonic = time.monotonic  # patchable seam for deterministic tests
 
@@ -1002,17 +1084,26 @@ def main(argv: list[str] | None = None) -> int:
         file=sys.stderr,
     )
     if not confirm(assume_yes=args.yes, reader=_read_confirm):
+        # Deliberate abort. Return EXIT_ERROR (the package contract's "aborted confirm"
+        # code) so a *skipped* run can never be mistaken for a *passed* release smoke run.
         print("Aborted; nothing was created.", file=sys.stderr)
-        return _exit_codes.EXIT_OK
+        return _exit_codes.EXIT_ERROR
 
     harness = Harness(clock=_monotonic)
     today = date.today()
-    planned = LIFECYCLE_STEPS + (1 if args.bulk > 0 else 0)
+    planned = LIFECYCLE_STEPS + (1 if args.bulk > 0 else 0) + (1 if args.login else 0)
+    walk_error: BaseException | None = None
     try:
+        if args.login:
+            # Force a cold login so the first-login/OTP path is actually exercised
+            # (the v0.1.0 bug class). Without this flag, the 'accounts' step only
+            # refreshes an existing session.
+            harness.step("login", lambda: auth.setup())
         run_lifecycle(harness, parent_id=args.parent, today=today)
         if args.bulk > 0:
             run_bulk(harness, parent_id=args.parent, count=args.bulk, today=today)
-    except Exception as exc:  # recorded already; cleanup runs below
+    except Exception as exc:  # recorded already; remember it so the exit code can classify
+        walk_error = exc
         _warn(f"walk stopped: {exc!r}")
     finally:
         leftovers = harness.cleanup(cancel=cancel_card, close=close_card, warn=_warn)
@@ -1021,7 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_json.dumps(json_report(harness.results, planned=planned, created=harness._created, leftovers=leftovers), indent=2))
     else:
         print(format_summary(harness.results, planned=planned), file=sys.stderr)
-    return exit_code(harness.results, leftovers=leftovers)
+    return exit_code(harness.results, leftovers=leftovers, error=walk_error)
 
 
 if __name__ == "__main__":
@@ -1050,7 +1141,7 @@ git commit -m "feat(smoke): wire main() with confirm, guaranteed cleanup, exit c
 - Modify: `scripts/smoke_test.py`
 - Modify: `tests/test_smoke.py`
 
-Adds `run_bulk` (creates `K` cards via the bulk path, registering each for cleanup) and `run_local_checks` (the safe, local-state commands `reconcile` and `status`; `clear-disabled` is intentionally NOT auto-run because toggling kill-switch state in a smoke run is a side effect, so it is documented as manual-only in Task 11). `run_bulk` uses `create_card` per row rather than the CSV-file bulk path so no temp file is needed; each card is still tagged and cleaned.
+Adds `run_bulk`, which exercises the **real public** `create_cards_bulk` helper (not a hand-rolled loop) so its prevalidation and pacing are actually covered, registering each returned card for cleanup. (`run_local_checks` for the safe local-state commands `reconcile`/`status` is documented as manual-only in Task 11; `clear-disabled` is intentionally NOT auto-run because toggling kill-switch state is a side effect.) `create_cards_bulk` builds rows in-memory and passes them straight to the helper, so no temp/CSV file is needed; each card is still smoke-prefixed and cleaned. The smoke run sets `delay_seconds=0` so the bulk pacing sleep does not slow the test (pacing logic is still type-exercised; its timing is unit-tested in the package's own suite).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1058,37 +1149,38 @@ Adds `run_bulk` (creates `K` cards via the bulk path, registering each for clean
 # tests/test_smoke.py — append
 
 
-def test_run_bulk_creates_and_registers_each_card(monkeypatch):
-    created_ids = iter(["vc_b1", "vc_b2"])
-    fake = _FakeCards()
+def test_run_bulk_calls_real_bulk_helper_and_registers_each_card(monkeypatch):
+    # run_bulk must drive the real public create_cards_bulk helper (bound at module
+    # scope on `smoke`) so its prevalidation/pacing are exercised. We patch that seam.
+    captured = {}
 
-    def make(parent, name, balance_cents, valid_to, *, client=None):
-        cid = next(created_ids)
-        fake.calls.append(("create_card", parent, name, balance_cents))
-        return _vcard(cid, name)
+    def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
+        captured["parent"] = parent
+        captured["rows"] = rows
+        captured["delay_seconds"] = delay_seconds
+        return [_vcard("vc_b1", rows[0]["name"]), _vcard("vc_b2", rows[1]["name"])]
 
-    fake.create_card = make
-    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "create_cards_bulk", fake_bulk)
     h = smoke.Harness(clock=_fake_clock_long())
-    h._state_parent = "cc_1"  # not needed; pass parent_id directly
     smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14))
+    assert captured["parent"] == "cc_1"
+    assert len(captured["rows"]) == 2
+    assert captured["delay_seconds"] == 0  # pacing disabled so the smoke run isn't slowed
     assert h._created == ["vc_b1", "vc_b2"]
     assert any(r.name == "bulk" and r.passed for r in h.results)
 
 
 def test_run_bulk_uses_smoke_prefix(monkeypatch):
-    names = []
-    fake = _FakeCards()
+    captured = {}
 
-    def make(parent, name, balance_cents, valid_to, *, client=None):
-        names.append(name)
-        return _vcard(f"vc_{len(names)}", name)
+    def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
+        captured["rows"] = rows
+        return [_vcard(f"vc_{i}", row["name"]) for i, row in enumerate(rows)]
 
-    fake.create_card = make
-    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "create_cards_bulk", fake_bulk)
     h = smoke.Harness(clock=_fake_clock_long())
     smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14))
-    assert all(n.startswith(smoke.SMOKE_CARD_NAME_PREFIX) for n in names)
+    assert all(row["name"].startswith(smoke.SMOKE_CARD_NAME_PREFIX) for row in captured["rows"])
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1104,9 +1196,17 @@ def run_bulk(harness: Harness, *, parent_id: str | None, count: int, today: date
     def _bulk():
         parent = parent_id or select_parent(list_credit_cards(), requested=None)
         valid_to = (today + timedelta(days=3)).isoformat()
-        for i in range(count):
-            name = f"{SMOKE_CARD_NAME_PREFIX} bulk {i} {today.isoformat()}"
-            card = create_card(parent, name, SMOKE_CARD_BALANCE_CENTS, valid_to)
+        rows = [
+            {
+                "name": f"{SMOKE_CARD_NAME_PREFIX} bulk {i} {today.isoformat()}",
+                "balance_cents": SMOKE_CARD_BALANCE_CENTS,
+                "valid_to": valid_to,
+            }
+            for i in range(count)
+        ]
+        # Drive the REAL public bulk helper so its prevalidation/pacing are covered.
+        # delay_seconds=0 disables the inter-card sleep (see create_cards_bulk docstring).
+        for card in create_cards_bulk(parent, rows, delay_seconds=0):
             harness.register_created(card.id)
 
     harness.step("bulk", _bulk)
@@ -1158,7 +1258,10 @@ Every test under `tests/` runs offline against fakes, so nothing in the suite ev
 talks to Extend. That is deliberate, but it means the suite cannot catch the code
 disagreeing with what the live API actually returns. The v0.1.0 login bug passed
 all unit tests and still failed on the first real login. This harness is the layer
-that would have caught it.
+that catches that class of drift — but note: by default the run **reuses a saved
+session** (it refreshes, it does not cold-login). To actually exercise the
+first-login/OTP path that the v0.1.0 bug lived in, pass `--login`, which forces a
+full `auth.setup()` before the lifecycle.
 
 ## What it does
 
@@ -1175,19 +1278,25 @@ prints a loud warning naming the card id and exits non-zero.
 # Requires the same credentials the CLI uses:
 #   EXTENDVCC_EMAIL, EXTENDVCC_PASSWORD, EXTENDVCC_IMAP_* (for first-time login)
 uv run python scripts/smoke_test.py            # prompts before touching the account
+uv run python scripts/smoke_test.py --login    # force a cold first-login (auth.setup) — exercises the OTP path
 uv run python scripts/smoke_test.py --yes      # skip the prompt (scripted local run)
 uv run python scripts/smoke_test.py --json     # machine-readable report
 uv run python scripts/smoke_test.py --parent cc_xxx   # pick a specific parent card
 uv run python scripts/smoke_test.py --bulk 3   # also create/close 3 cards via bulk
 ```
 
-Exit code is `0` only if every check passed and the test card was cleaned up.
+Exit code is `0` only if every check passed and the test card was cleaned up. A
+deliberate abort at the confirmation prompt returns a non-zero code (the package's
+"aborted confirm" code), so a *skipped* run can never be mistaken for a *passed* one.
+A failed step's exit code reflects the cause: disabled kill-switch, auth required,
+API error, or generic error — mirroring the CLI's own mapping.
 
 ## Coverage map
 
 | Command / method | Covered by | Notes |
 |---|---|---|
-| `login` / session refresh | `accounts` step (first auth call) | full login if no session |
+| session refresh | `accounts` step (first auth call) | `account_context()` refreshes an existing session; it does NOT cold-login |
+| `login` / `setup` (cold first-login + OTP) | `--login` (opt-in) | runs `auth.setup()`; only this exercises the first-login/OTP path |
 | `accounts` / `account_context` | `accounts` step | |
 | `issuers` / `list_issuers` | `issuers` step | |
 | `list_credit_cards` | `issuers` step | also selects parent |
@@ -1199,7 +1308,7 @@ Exit code is `0` only if every check passed and the test card was cleaned up.
 | `usage` | `usage` step | |
 | `cancel` / `cancel_card` | `cancel` step + cleanup | |
 | `close` / `close_card` | `close` step + cleanup | |
-| `bulk` / `create_cards_bulk` path | `--bulk K` | opt-in |
+| `bulk` / `create_cards_bulk` | `--bulk K` | opt-in; drives the real `create_cards_bulk` helper with pacing disabled |
 | `reconcile` | run manually: `extendvcc reconcile` | local state, safe |
 | `status` | run manually: `extendvcc status` | local state, safe |
 | `clear-disabled` | run manually only | toggles kill-switch state |
@@ -1288,4 +1397,4 @@ git commit -m "docs(smoke): document the release smoke test and coverage map"
 
 **Placeholder scan:** no TBD/TODO; every code step shows complete code; commands have expected output.
 
-**Type consistency:** `Harness(clock=...)`, `harness.step(name, fn)`, `register_created`, `cleanup(cancel=, close=, warn=)`, `run_lifecycle(harness, *, parent_id, today)`, `run_bulk(harness, *, parent_id, count, today)`, `select_parent(cards, *, requested)`, `exit_code(results, *, leftovers)`, `format_summary(results, *, planned)`, `json_report(...)`, `parse_args`, `confirm(assume_yes=, reader=)`, `main(argv)` — names are consistent across tasks. Card functions are bound at module scope (Task 8) so tests monkeypatch them on the `smoke` module. The `_monotonic` and `_read_confirm` seams (Task 9) are patched by name in the same task's tests.
+**Type consistency:** `Harness(clock=...)`, `harness.step(name, fn)`, `register_created`, `mark_closed`, `cleanup(cancel=, close=, warn=)`, `run_lifecycle(harness, *, parent_id, today)`, `run_bulk(harness, *, parent_id, count, today)`, `select_parent(cards, *, requested)`, `exit_code(results, *, leftovers, error)`, `format_summary(results, *, planned)`, `json_report(...)`, `parse_args`, `confirm(assume_yes=, reader=)`, `main(argv)` — names are consistent across tasks. Card functions (including `create_cards_bulk`) and `auth` are bound at module scope (Task 8/9) so tests monkeypatch them on the `smoke` module. The `_monotonic` and `_read_confirm` seams (Task 9) are patched by name in the same task's tests.
