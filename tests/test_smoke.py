@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from extendvcc import _exit_codes
 from extendvcc.auth import SessionNotFound
-from extendvcc.client import PayWithExtendDisabled, PayWithExtendError
+from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
 from extendvcc.models import CardStatus, CreditCard, Issuer, VirtualCard
 
 _SMOKE_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "smoke_test.py"
@@ -351,7 +351,7 @@ class _FakeCards:
     def get_card(self, card_id, *, client=None):
         self.calls.append(("get_card", card_id))
         if self._fail_on == "get":
-            raise RuntimeError("get exploded")
+            raise PayWithExtendAPIError("get exploded", status_code=500, path="/virtualCards")
         return _vcard(card_id, f"{smoke.SMOKE_CARD_NAME_PREFIX} x")
 
     def list_cards(self, *, client=None, **kw):
@@ -473,3 +473,119 @@ def test_run_bulk_uses_smoke_prefix(monkeypatch):
     run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} run-test"
     smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14), run_prefix=run_prefix)
     assert all(row["name"].startswith(smoke.SMOKE_CARD_NAME_PREFIX) for row in captured["rows"])
+
+
+def test_main_happy_path_returns_ok_and_cleans_up(monkeypatch, capsys):
+    fake = _FakeCards()
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)  # pretend not-CI
+    rc = smoke.main(["--yes"])
+    assert rc == _exit_codes.EXIT_OK
+    assert ("cancel_card", "vc_new") in fake.calls
+    assert ("close_card", "vc_new") in fake.calls
+
+
+def test_main_returns_api_error_and_still_closes_card_on_failure(monkeypatch):
+    fake = _FakeCards(fail_on="get")
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)  # pretend not-CI
+    rc = smoke.main(["--yes"])
+    assert rc == _exit_codes.EXIT_API_ERROR
+    assert ("close_card", "vc_new") in fake.calls
+
+
+def test_main_aborts_when_not_confirmed(monkeypatch):
+    fake = _FakeCards()
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_read_confirm", lambda: "no")
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)  # pretend not-CI
+    rc = smoke.main([])
+    assert rc == _exit_codes.EXIT_ERROR
+    assert not any(c[0] == "create_card" for c in fake.calls)
+
+
+def test_refuse_in_ci_detects_markers():
+    assert smoke._refuse_in_ci({"CI": "true"}) == "CI"
+    assert smoke._refuse_in_ci({"GITHUB_ACTIONS": "true"}) == "GITHUB_ACTIONS"
+    assert smoke._refuse_in_ci({"PATH": "/usr/bin"}) is None
+    assert smoke._refuse_in_ci({}) is None
+
+
+def test_main_refuses_in_ci_before_any_card_call(monkeypatch):
+    fake = _FakeCards()
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: "GITHUB_ACTIONS")
+    rc = smoke.main(["--yes"])
+    assert rc == _exit_codes.EXIT_ERROR
+    assert not any(c[0] == "create_card" for c in fake.calls)
+
+
+def test_main_login_passes_otp_callback(monkeypatch):
+    fake = _FakeCards()
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)
+    monkeypatch.setattr(smoke, "make_otp_callback", lambda: lambda prompt: "000000")
+    captured = {}
+
+    def fake_setup(*, otp_callback=None):
+        captured["otp_callback"] = otp_callback
+        return {"email": "user@example.com"}
+
+    monkeypatch.setattr(smoke.auth, "setup", fake_setup)
+    rc = smoke.main(["--yes", "--login"])
+    assert rc == _exit_codes.EXIT_OK
+    assert captured["otp_callback"] is not None  # OTP path is actually wired
+
+
+def test_main_discovery_sweep_closes_orphaned_smoke_card(monkeypatch):
+    import datetime as _dt
+    from types import SimpleNamespace as _NS
+
+    frozen = _dt.datetime(2026, 6, 14, 21, 35, 12, tzinfo=_dt.timezone.utc)
+    monkeypatch.setattr(smoke, "_now_utc", lambda: frozen)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: _NS(hex="1a2b3c4d" + "0" * 24))
+    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} 20260614T213512Z-1a2b3c4d"
+
+    fake = _FakeCards()
+    orphan = _vcard("vc_orphan", f"{run_prefix} orphan")
+
+    def exploding_create(parent, name, balance_cents, valid_to, *, client=None):
+        fake.calls.append(("create_card", parent, name, balance_cents))
+        raise RuntimeError("created remotely but mapping blew up")
+
+    fake.create_card = exploding_create
+    fake.list_cards = lambda *, client=None, **kw: [orphan]
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)
+    smoke.main(["--yes"])
+    assert ("close_card", "vc_orphan") in fake.calls
+
+
+def test_main_bulk_partial_failure_card_is_still_closed_via_sweep(monkeypatch):
+    import datetime as _dt
+    from types import SimpleNamespace as _NS
+
+    frozen = _dt.datetime(2026, 6, 14, 21, 35, 12, tzinfo=_dt.timezone.utc)
+    monkeypatch.setattr(smoke, "_now_utc", lambda: frozen)
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: _NS(hex="1a2b3c4d" + "0" * 24))
+    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} 20260614T213512Z-1a2b3c4d"
+
+    fake = _FakeCards()
+    orphan = _vcard("vc_bulk_orphan", f"{run_prefix} bulk 0")
+
+    def exploding_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
+        fake.calls.append(("create_cards_bulk", parent, len(rows)))
+        raise RuntimeError("bulk item 1 failed after item 0 was created")
+
+    fake.create_cards_bulk = exploding_bulk
+    fake.list_cards = lambda *, client=None, **kw: [_vcard("vc_new", run_prefix), orphan]
+    _patch_cards(monkeypatch, fake)
+    monkeypatch.setattr(smoke, "create_cards_bulk", exploding_bulk)
+    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
+    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)
+    smoke.main(["--yes", "--bulk", "2"])
+    assert ("close_card", "vc_bulk_orphan") in fake.calls

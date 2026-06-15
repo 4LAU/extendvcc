@@ -11,12 +11,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json as _json
+import os
 import re
+import sys
+import time
+import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
-from extendvcc import _exit_codes
+from extendvcc import _exit_codes, auth
 from extendvcc.auth import PayWithExtendAuthError
 from extendvcc.cards import (
     account_context,
@@ -33,11 +38,17 @@ from extendvcc.cards import (
     usage,
 )
 from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
+from extendvcc.imap_otp import make_otp_callback
 from extendvcc.models import CardStatus, CreditCard
 
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
 LIFECYCLE_STEPS = 10
+
+_monotonic = time.monotonic  # patchable seam for deterministic tests
+
+# CI env markers — this live, money-touching script must never run in CI.
+_CI_ENV_MARKERS = ("CI", "GITHUB_ACTIONS", "BUILDKITE", "CIRCLECI", "GITLAB_CI", "JENKINS_URL", "TF_BUILD")
 
 
 class SmokeError(Exception):
@@ -342,3 +353,104 @@ def run_bulk(harness: Harness, *, parent_id: str | None, count: int, today: date
             harness.register_created(card.id)
 
     harness.step("bulk", _bulk)
+
+
+def _now_utc() -> datetime:
+    """Patchable seam: current UTC time for the unique per-run card prefix."""
+    return datetime.now(timezone.utc)
+
+
+def _refuse_in_ci(env: dict[str, str] | None = None) -> str | None:
+    """Return the name of the first CI marker present, or None if not in CI."""
+    environ = env if env is not None else os.environ
+    for marker in _CI_ENV_MARKERS:
+        if environ.get(marker):
+            return marker
+    return None
+
+
+def discover_smoke_leftovers(harness: Harness, *, run_prefix: str) -> None:
+    """Backstop: register any live smoke card this run created but failed to record.
+
+    create_card / create_cards_bulk can create a remote card and then raise before
+    the id reaches the harness. We list live cards, find any non-terminal card whose
+    name starts with THIS run's unique prefix, and register it so cleanup closes it.
+    """
+    try:
+        for card in list_cards():
+            if not card.name.startswith(run_prefix):
+                continue
+            if card.status in (CardStatus.CLOSED, CardStatus.CANCELLED):
+                continue
+            if card.id not in harness._created:
+                harness.register_created(card.id)
+    except Exception as exc:  # discovery is best-effort; never mask the real failure
+        create_attempted = any(r.name in ("create", "bulk") for r in harness.results)
+        if create_attempted:
+            dollars = SMOKE_CARD_BALANCE_CENTS / 100
+            _warn(
+                f"leftover discovery FAILED after a create was attempted: {exc!r}. "
+                f"A live ${dollars:.2f} smoke card may be open. Check the account for any card "
+                f"named '{run_prefix}*' and close it manually."
+            )
+        else:
+            _warn(f"leftover discovery failed (no create attempted, harmless): {exc!r}")
+
+
+def _read_confirm() -> str:
+    return input("Create and close a real $110.01 card on the LIVE account? [y/N] ")
+
+
+def _warn(msg: str) -> None:
+    print(f"WARNING: {msg}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    ci_marker = _refuse_in_ci()
+    if ci_marker is not None:
+        print(
+            f"REFUSING to run: CI environment detected ({ci_marker} is set). "
+            "This script creates a real card on a live account and must only run on a maintainer's machine.",
+            file=sys.stderr,
+        )
+        return _exit_codes.EXIT_ERROR
+    print(
+        "extendvcc live smoke test: creates a real $110.01 virtual card on your "
+        "Extend account, exercises the full lifecycle, then cancels and closes it.",
+        file=sys.stderr,
+    )
+    if not confirm(assume_yes=args.yes, reader=_read_confirm):
+        print("Aborted; nothing was created.", file=sys.stderr)
+        return _exit_codes.EXIT_ERROR
+
+    harness = Harness(clock=_monotonic)
+    today = date.today()
+    stamp = _now_utc().strftime("%Y%m%dT%H%M%SZ")
+    run_prefix = f"{SMOKE_CARD_NAME_PREFIX} {stamp}-{uuid.uuid4().hex[:8]}"
+    print(f"smoke run prefix: {run_prefix!r} (search the account by this if cleanup warns)", file=sys.stderr)
+    planned = LIFECYCLE_STEPS + (1 if args.bulk > 0 else 0) + (1 if args.login else 0)
+    walk_error: BaseException | None = None
+    try:
+        if args.login:
+            harness.step("login", lambda: auth.setup(otp_callback=make_otp_callback()))
+        run_lifecycle(harness, parent_id=args.parent, today=today, run_prefix=run_prefix)
+        if args.bulk > 0:
+            run_bulk(harness, parent_id=args.parent, count=args.bulk, today=today, run_prefix=run_prefix)
+    except Exception as exc:  # recorded already; remember it so the exit code can classify
+        walk_error = exc
+        _warn(f"walk stopped: {exc!r}")
+    finally:
+        discover_smoke_leftovers(harness, run_prefix=run_prefix)
+        leftovers = harness.cleanup(cancel=cancel_card, close=close_card, warn=_warn)
+
+    if args.json:
+        report = json_report(harness.results, planned=planned, created=harness._created, leftovers=leftovers)
+        print(_json.dumps(report, indent=2))
+    else:
+        print(format_summary(harness.results, planned=planned), file=sys.stderr)
+    return exit_code(harness.results, leftovers=leftovers, error=walk_error)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
