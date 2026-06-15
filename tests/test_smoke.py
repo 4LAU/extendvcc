@@ -1,13 +1,15 @@
 import datetime
 import importlib.util
+import itertools
 import pathlib
 import sys
+from datetime import date as _date
 from types import SimpleNamespace
 
 from extendvcc import _exit_codes
 from extendvcc.auth import SessionNotFound
 from extendvcc.client import PayWithExtendDisabled, PayWithExtendError
-from extendvcc.models import CardStatus, CreditCard
+from extendvcc.models import CardStatus, CreditCard, Issuer, VirtualCard
 
 _SMOKE_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "smoke_test.py"
 
@@ -71,6 +73,11 @@ def test_mask_last4():
 def _fake_clock():
     ticks = iter([0.0, 0.5, 1.0, 2.5, 3.0, 10.0])
     return lambda: next(ticks)
+
+
+def _fake_clock_long():
+    counter = itertools.count()
+    return lambda: float(next(counter))
 
 
 def test_step_records_pass_with_duration():
@@ -298,3 +305,135 @@ def test_select_parent_raises_when_no_active_card():
     cards = [_cc("cc_x", CardStatus.CANCELLED)]
     with pytest.raises(smoke.SmokeError):
         smoke.select_parent(cards, requested=None)
+
+
+def _vcard(cid, name, status=CardStatus.ACTIVE):
+    # VirtualCard is frozen+slots; ALL fields are required (no defaults). Supply every one.
+    return VirtualCard(
+        id=cid,
+        credit_card_id="cc_1",
+        name=name,
+        last4="4242",
+        status=status,
+        balance_cents=11001,
+        valid_from=_date(2026, 6, 14),
+        valid_to=_date(2026, 6, 20),
+        notes=None,
+        created_at=None,
+    )
+
+
+class _FakeCards:
+    """Records calls and returns canned values for the orchestration."""
+
+    def __init__(self, *, fail_on=None):
+        self.calls = []
+        self._fail_on = fail_on
+
+    def account_context(self):
+        self.calls.append(("account_context",))
+        return {"email": "user@example.com", "org": "org_123"}
+
+    def list_issuers(self, *, client=None):
+        self.calls.append(("list_issuers",))
+        return [Issuer(id="iss_1", name="Issuer One", code="ISS1")]  # Issuer requires id, name, code
+
+    def list_credit_cards(self, *, client=None):
+        self.calls.append(("list_credit_cards",))
+        return [_cc("cc_1", CardStatus.ACTIVE)]
+
+    def create_card(self, parent, name, balance_cents, valid_to, *, client=None):
+        self.calls.append(("create_card", parent, name, balance_cents))
+        if self._fail_on == "create":
+            raise RuntimeError("create exploded")
+        return _vcard("vc_new", name)
+
+    def get_card(self, card_id, *, client=None):
+        self.calls.append(("get_card", card_id))
+        if self._fail_on == "get":
+            raise RuntimeError("get exploded")
+        return _vcard(card_id, f"{smoke.SMOKE_CARD_NAME_PREFIX} x")
+
+    def list_cards(self, *, client=None, **kw):
+        self.calls.append(("list_cards",))
+        return [_vcard("vc_new", "n")]
+
+    def reveal_card(self, card_id, *, client=None):
+        self.calls.append(("reveal_card", card_id))
+        # Real reveal_card() returns {"number","cvc","last4","expires"} (see cards.py)
+        return {"number": "4242424242424242", "cvc": "123", "expires": "2028-09", "last4": "4242"}
+
+    def update_card(self, card_id, *, name=None, client=None, **kw):
+        self.calls.append(("update_card", card_id, name))
+        return _vcard(card_id, name or "n")
+
+    def usage(self, *, client=None):
+        self.calls.append(("usage",))
+        return {"used": 1, "remaining": 9, "limit": 10}
+
+    def cancel_card(self, card_id, *, client=None):
+        self.calls.append(("cancel_card", card_id))
+        return _vcard(card_id, "n", CardStatus.CANCELLED)
+
+    def close_card(self, card_id, *, client=None):
+        self.calls.append(("close_card", card_id))
+        return _vcard(card_id, "n", CardStatus.CLOSED)
+
+
+def _patch_cards(monkeypatch, fake):
+    for name in (
+        "account_context",
+        "list_issuers",
+        "list_credit_cards",
+        "create_card",
+        "get_card",
+        "list_cards",
+        "reveal_card",
+        "update_card",
+        "usage",
+        "cancel_card",
+        "close_card",
+    ):
+        monkeypatch.setattr(smoke, name, getattr(fake, name))
+
+
+def test_run_lifecycle_happy_path_calls_every_step(monkeypatch):
+    fake = _FakeCards()
+    _patch_cards(monkeypatch, fake)
+    h = smoke.Harness(clock=_fake_clock_long())
+    smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
+    names = [r.name for r in h.results]
+    for expected in ["accounts", "issuers", "create", "get", "list", "reveal", "update", "usage", "cancel", "close"]:
+        assert expected in names
+    assert all(r.passed for r in h.results)
+    assert h._created == ["vc_new"]
+
+
+def test_run_lifecycle_registers_card_before_later_failure(monkeypatch):
+    import pytest
+
+    fake = _FakeCards(fail_on="get")
+    _patch_cards(monkeypatch, fake)
+    h = smoke.Harness(clock=_fake_clock_long())
+    with pytest.raises(RuntimeError):
+        smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
+    # card was created, so cleanup must still close it
+    assert h._created == ["vc_new"]
+    assert any(r.name == "get" and not r.passed for r in h.results)
+
+
+def test_run_lifecycle_reveal_rejects_invalid_card_data(monkeypatch):
+    import pytest
+
+    fake = _FakeCards()
+    fake.reveal_card = lambda card_id, client=None: {
+        "number": "4242424242424241",  # bad Luhn
+        "cvc": "123",
+        "expires": "2028-09",
+        "last4": "4241",
+    }
+    _patch_cards(monkeypatch, fake)
+    h = smoke.Harness(clock=_fake_clock_long())
+    with pytest.raises(smoke.SmokeError):
+        smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
+    assert any(r.name == "reveal" and not r.passed for r in h.results)

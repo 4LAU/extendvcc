@@ -13,16 +13,30 @@ from __future__ import annotations
 import argparse
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Callable
 
 from extendvcc import _exit_codes
 from extendvcc.auth import PayWithExtendAuthError
+from extendvcc.cards import (
+    account_context,
+    cancel_card,
+    close_card,
+    create_card,
+    get_card,
+    list_cards,
+    list_credit_cards,
+    list_issuers,
+    reveal_card,
+    update_card,
+    usage,
+)
 from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
 from extendvcc.models import CardStatus, CreditCard
 
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
+LIFECYCLE_STEPS = 10
 
 
 class SmokeError(Exception):
@@ -227,3 +241,78 @@ def confirm(*, assume_yes: bool, reader: Callable[[], str]) -> bool:
     if assume_yes:
         return True
     return reader().strip().lower() in ("y", "yes")
+
+
+def run_lifecycle(harness: Harness, *, parent_id: str | None, today: date, run_prefix: str) -> None:
+    state: dict = {}
+
+    def _accounts():
+        state["ctx"] = account_context()
+
+    def _issuers():
+        list_issuers()
+        state["parent"] = select_parent(list_credit_cards(), requested=parent_id)
+
+    def _create():
+        name = run_prefix  # unique per run; the discovery sweep matches on this exact prefix
+        valid_to = (today + timedelta(days=3)).isoformat()
+        card = create_card(state["parent"], name, SMOKE_CARD_BALANCE_CENTS, valid_to)
+        state["card_id"] = card.id
+        harness.register_created(card.id)  # register the instant it exists
+
+    def _get():
+        card = get_card(state["card_id"])
+        if card.balance_cents != SMOKE_CARD_BALANCE_CENTS:
+            raise SmokeError(f"created card balance {card.balance_cents} != {SMOKE_CARD_BALANCE_CENTS}")
+
+    def _list():
+        ids = {c.id for c in list_cards()}
+        if state["card_id"] not in ids:
+            raise SmokeError("created card not present in list_cards()")
+
+    def _reveal():
+        creds = reveal_card(state["card_id"])  # returns {"number","cvc","last4","expires"}
+        if not luhn_valid(creds["number"]):
+            raise SmokeError("revealed PAN failed Luhn check")
+        if not cvc_valid(creds["cvc"]):
+            raise SmokeError("revealed CVC is not 3-4 digits")
+        if not expiry_in_future(creds.get("expires") or "", today):
+            raise SmokeError("revealed expiry is not in the future")
+        # creds discarded here; nothing returned up the stack
+
+    def _update():
+        # Keep the run_prefix as a leading substring so the discovery sweep
+        # (which matches name.startswith(run_prefix)) still finds the card after
+        # a rename, and append a marker to prove the update applied.
+        new_name = f"{run_prefix} updated"
+        card = update_card(state["card_id"], name=new_name)
+        if "updated" not in card.name:
+            raise SmokeError("update_card did not apply the new name")
+
+    def _usage():
+        report = usage()
+        for key in ("used", "remaining", "limit"):
+            if key not in report:
+                raise SmokeError(f"usage() missing key {key!r}")
+
+    def _cancel():
+        card = cancel_card(state["card_id"])
+        if card.status != CardStatus.CANCELLED:
+            raise SmokeError(f"cancel left status {card.status}")
+
+    def _close():
+        card = close_card(state["card_id"])
+        if card.status != CardStatus.CLOSED:
+            raise SmokeError(f"close left status {card.status}")
+        harness.mark_closed(state["card_id"])  # so cleanup won't re-cancel/re-close it
+
+    harness.step("accounts", _accounts)
+    harness.step("issuers", _issuers)
+    harness.step("create", _create)
+    harness.step("get", _get)
+    harness.step("list", _list)
+    harness.step("reveal", _reveal)
+    harness.step("update", _update)
+    harness.step("usage", _usage)
+    harness.step("cancel", _cancel)
+    harness.step("close", _close)
