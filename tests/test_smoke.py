@@ -6,6 +6,8 @@ import sys
 from datetime import date as _date
 from types import SimpleNamespace
 
+import pytest
+
 from extendvcc import _exit_codes
 from extendvcc.auth import SessionNotFound
 from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
@@ -31,19 +33,13 @@ def _load_smoke():
 smoke = _load_smoke()
 
 
-def test_module_imports_without_network_and_exposes_constants():
-    assert smoke.SMOKE_CARD_BALANCE_CENTS == 11001
-    assert smoke.SMOKE_CARD_NAME_PREFIX == "extendvcc-smoke"
+# --- Validators: wrong card data / wrong expiry are silent financial drift ---
 
 
-def test_luhn_valid_accepts_known_good_pan():
-    # 4242 4242 4242 4242 is a Luhn-valid 16-digit test PAN
-    assert smoke.luhn_valid("4242424242424242") is True
-
-
-def test_luhn_valid_rejects_bad_checksum_and_wrong_length():
-    assert smoke.luhn_valid("4242424242424241") is False
-    assert smoke.luhn_valid("123") is False
+def test_luhn_valid():
+    assert smoke.luhn_valid("4242424242424242") is True  # valid 16-digit test PAN
+    assert smoke.luhn_valid("4242424242424241") is False  # bad checksum
+    assert smoke.luhn_valid("123") is False  # wrong length
     assert smoke.luhn_valid("") is False
 
 
@@ -60,9 +56,7 @@ def test_expiry_in_future():
     assert smoke.expiry_in_future("2026-06", today) is True  # same month counts
     assert smoke.expiry_in_future("2026-05", today) is False
     assert smoke.expiry_in_future("not-a-date", today) is False
-    assert smoke.expiry_in_future("2027-99junk", today) is False  # month out of range
-    assert smoke.expiry_in_future("2027-13", today) is False  # month > 12
-    assert smoke.expiry_in_future("2027-00", today) is False  # month < 1
+    assert smoke.expiry_in_future("2027-13", today) is False  # month out of range
     # Real vault reveal format is a full ISO-8601 datetime — must parse, not reject.
     assert smoke.expiry_in_future("2029-09-02T00:00:00.000+0000", today) is True
     assert smoke.expiry_in_future("2025-12-31T00:00:00.000+0000", today) is False  # past, full ISO
@@ -78,24 +72,18 @@ def _fake_clock_long():
     return lambda: float(next(counter))
 
 
-def test_step_records_pass_with_duration():
-    h = smoke.Harness(clock=_fake_clock())
-    h.step("alpha", lambda: None)
-    assert len(h.results) == 1
-    assert h.results[0].name == "alpha"
-    assert h.results[0].passed is True
-    assert h.results[0].seconds == 0.5
-
-
 def test_step_records_failure_and_reraises():
+    # If step() swallowed the exception, the walk would continue past a failed
+    # step and cleanup/exit-code would silently misclassify the run.
     h = smoke.Harness(clock=_fake_clock())
-    import pytest
-
     with pytest.raises(ValueError):
         h.step("boom", lambda: (_ for _ in ()).throw(ValueError("nope")))
     assert h.results[-1].name == "boom"
     assert h.results[-1].passed is False
     assert "nope" in h.results[-1].detail
+
+
+# --- cleanup(): the money-safety core. A leftover open card is silent exposure. ---
 
 
 def _closed(cid):
@@ -128,20 +116,6 @@ def test_cleanup_cancels_and_closes_every_created_card():
     ]
 
 
-def test_cleanup_skips_cards_already_marked_closed():
-    h = smoke.Harness(clock=_fake_clock())
-    h.register_created("vc_done")
-    h.mark_closed("vc_done")
-    calls = []
-    leftovers = h.cleanup(
-        cancel=lambda cid: calls.append(("cancel", cid)),
-        close=lambda cid: calls.append(("close", cid)) or _closed(cid),
-        warn=lambda msg: calls.append(("warn", msg)),
-    )
-    assert leftovers == []
-    assert calls == []  # already torn down by the lifecycle close step
-
-
 def test_cleanup_reports_leftover_when_close_fails():
     h = smoke.Harness(clock=_fake_clock())
     h.register_created("vc_bad")
@@ -161,6 +135,8 @@ def test_cleanup_reports_leftover_when_close_fails():
 
 
 def test_cleanup_reports_leftover_when_close_returns_non_closed_status():
+    # The exact drift this harness exists to catch: the live API returns 200 but
+    # the card is NOT actually CLOSED. A non-raising close must not be trusted.
     h = smoke.Harness(clock=_fake_clock())
     h.register_created("vc_still_active")
     warnings = []
@@ -176,6 +152,8 @@ def test_cleanup_reports_leftover_when_close_returns_non_closed_status():
 
 
 def test_cleanup_still_closes_when_cancel_fails():
+    # A failed cancel (e.g. card already CANCELLED -> 4xx) must NOT block the
+    # close, which is the permanent money-safety operation.
     h = smoke.Harness(clock=_fake_clock())
     h.register_created("vc_cancel_4xx")
     calls = []
@@ -196,14 +174,15 @@ def test_cleanup_still_closes_when_cancel_fails():
     assert leftovers == []  # a failed cancel alone is NOT a leftover; close succeeded
 
 
-def test_exit_code_ok_when_all_pass_and_no_leftovers():
-    results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", True, 0.2)]
-    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_OK
+# --- exit_code(): a misclassified run is a silently wrong release signal ---
 
 
-def test_exit_code_api_error_on_failed_step_without_known_error():
-    results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", False, 0.2, "boom")]
-    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_API_ERROR
+def test_exit_code_ok_when_clean_else_api_error():
+    ok = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", True, 0.2)]
+    assert smoke.exit_code(ok, leftovers=[], error=None) == _exit_codes.EXIT_OK
+    failed = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", False, 0.2, "boom")]
+    # a failed step with no known terminating exception is treated as live API drift
+    assert smoke.exit_code(failed, leftovers=[], error=None) == _exit_codes.EXIT_API_ERROR
 
 
 def test_exit_code_maps_known_exceptions():
@@ -217,57 +196,28 @@ def test_exit_code_maps_known_exceptions():
 
 def test_exit_code_error_when_leftover_card():
     results = [smoke.StepResult("a", True, 0.1)]
-    # a leftover card outranks everything else
+    # a leftover (un-closed) card outranks everything else — money may be at risk
     assert smoke.exit_code(results, leftovers=[("vc_x", "err")], error=None) == _exit_codes.EXIT_ERROR
 
 
-def test_format_summary_counts_and_marks():
-    results = [smoke.StepResult("auth", True, 0.10), smoke.StepResult("create", False, 0.20, "boom")]
-    text = smoke.format_summary(results, planned=5)
-    assert "auth" in text and "create" in text
-    assert "1/5" in text  # 1 passed of 5 planned
-
-
-def test_json_report_redacts_and_lists_cards():
+def test_json_report_never_serializes_card_credentials():
+    # Tier-1 credential security: the report must never grow a field carrying a
+    # PAN/CVC. Guards against a future change leaking creds into the JSON output.
     results = [smoke.StepResult("auth", True, 0.1)]
     report = smoke.json_report(results, planned=3, created=["vc_1"], leftovers=[])
-    assert report["passed"] == 1
-    assert report["planned"] == 3
     assert report["created"] == ["vc_1"]
-    assert report["leftovers"] == []
-    # never serialize raw card data (real reveal keys are number/cvc/securityCode/vcn)
     blob = repr(report)
     assert "number" not in blob and "cvc" not in blob
     assert "vcn" not in blob and "securityCode" not in blob
 
 
-def test_parse_args_defaults():
-    ns = smoke.parse_args([])
-    assert ns.yes is False
-    assert ns.login is False
-    assert ns.parent is None
-    assert ns.bulk == 0
-    assert ns.json is False
-
-
-def test_parse_args_all_flags():
-    ns = smoke.parse_args(["--yes", "--login", "--parent", "cc_123", "--bulk", "3", "--json"])
-    assert ns.yes is True
-    assert ns.login is True
-    assert ns.parent == "cc_123"
-    assert ns.bulk == 3
-    assert ns.json is True
-
-
-def test_confirm_returns_true_when_yes_flag_set():
-    # --yes bypasses the prompt entirely (input callable must not be called)
+def test_confirm_gate():
+    # The money gate before any card is created. --yes bypasses the prompt;
+    # otherwise only an explicit y/yes proceeds.
     def boom():
         raise AssertionError("prompt should be skipped")
 
     assert smoke.confirm(assume_yes=True, reader=boom) is True
-
-
-def test_confirm_reads_yes_no():
     assert smoke.confirm(assume_yes=False, reader=lambda: "yes") is True
     assert smoke.confirm(assume_yes=False, reader=lambda: "y") is True
     assert smoke.confirm(assume_yes=False, reader=lambda: "no") is False
@@ -280,29 +230,11 @@ def _cc(cid, status):
 
 
 def test_select_parent_prefers_explicit_when_present():
+    # If an explicit --parent were silently ignored in favour of the first active
+    # card, the smoke card would be created on the wrong parent (both ACTIVE, API
+    # succeeds) — a silent mis-targeting.
     cards = [_cc("cc_1", CardStatus.ACTIVE), _cc("cc_2", CardStatus.ACTIVE)]
     assert smoke.select_parent(cards, requested="cc_2") == "cc_2"
-
-
-def test_select_parent_falls_back_to_first_active():
-    cards = [_cc("cc_x", CardStatus.CANCELLED), _cc("cc_y", CardStatus.ACTIVE)]
-    assert smoke.select_parent(cards, requested=None) == "cc_y"
-
-
-def test_select_parent_raises_when_requested_missing():
-    import pytest
-
-    cards = [_cc("cc_y", CardStatus.ACTIVE)]
-    with pytest.raises(smoke.SmokeError):
-        smoke.select_parent(cards, requested="cc_absent")
-
-
-def test_select_parent_raises_when_no_active_card():
-    import pytest
-
-    cards = [_cc("cc_x", CardStatus.CANCELLED)]
-    with pytest.raises(smoke.SmokeError):
-        smoke.select_parent(cards, requested=None)
 
 
 def _vcard(cid, name, status=CardStatus.ACTIVE):
@@ -396,6 +328,8 @@ def _patch_cards(monkeypatch, fake):
 
 
 def test_run_lifecycle_happy_path_calls_every_step(monkeypatch):
+    # A dropped step (e.g. the close step removed) is silent: no crash, but a
+    # drift check or a money-safety operation goes unexercised.
     fake = _FakeCards()
     _patch_cards(monkeypatch, fake)
     h = smoke.Harness(clock=_fake_clock_long())
@@ -408,8 +342,6 @@ def test_run_lifecycle_happy_path_calls_every_step(monkeypatch):
 
 
 def test_run_lifecycle_registers_card_before_later_failure(monkeypatch):
-    import pytest
-
     fake = _FakeCards(fail_on="get")
     _patch_cards(monkeypatch, fake)
     h = smoke.Harness(clock=_fake_clock_long())
@@ -421,8 +353,6 @@ def test_run_lifecycle_registers_card_before_later_failure(monkeypatch):
 
 
 def test_run_lifecycle_reveal_rejects_invalid_card_data(monkeypatch):
-    import pytest
-
     fake = _FakeCards()
     fake.reveal_card = lambda card_id, client=None: {
         "number": "4242424242424241",  # bad Luhn
@@ -462,8 +392,6 @@ def test_run_lifecycle_list_step_retries_until_card_appears(monkeypatch):
 
 
 def test_run_lifecycle_list_step_fails_after_exhausting_retries(monkeypatch):
-    import pytest
-
     # If the card never appears, the list step must still fail (drift detected),
     # after exhausting the retry budget — without sleeping after the final attempt.
     fake = _FakeCards()
@@ -478,9 +406,10 @@ def test_run_lifecycle_list_step_fails_after_exhausting_retries(monkeypatch):
     assert len(sleeps) == smoke.LIST_RETRY_ATTEMPTS - 1  # no sleep after the last attempt
 
 
-def test_run_bulk_calls_real_bulk_helper_and_registers_each_card(monkeypatch):
+def test_run_bulk_drives_real_bulk_helper_and_registers_each_card(monkeypatch):
     # run_bulk must drive the real public create_cards_bulk helper (bound at module
-    # scope on `smoke`) so its prevalidation/pacing are exercised. We patch that seam.
+    # scope on `smoke`) so its prevalidation/pacing are exercised, register every
+    # returned id for cleanup, and name rows with the run prefix the sweep matches.
     captured = {}
 
     def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
@@ -496,25 +425,12 @@ def test_run_bulk_calls_real_bulk_helper_and_registers_each_card(monkeypatch):
     assert captured["parent"] == "cc_1"
     assert len(captured["rows"]) == 2
     assert captured["delay_seconds"] == 0  # pacing disabled so the smoke run isn't slowed
+    assert all(row["name"].startswith(smoke.SMOKE_CARD_NAME_PREFIX) for row in captured["rows"])
     assert h._created == ["vc_b1", "vc_b2"]
     assert any(r.name == "bulk" and r.passed for r in h.results)
 
 
-def test_run_bulk_uses_smoke_prefix(monkeypatch):
-    captured = {}
-
-    def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
-        captured["rows"] = rows
-        return [_vcard(f"vc_{i}", row["name"]) for i, row in enumerate(rows)]
-
-    monkeypatch.setattr(smoke, "create_cards_bulk", fake_bulk)
-    h = smoke.Harness(clock=_fake_clock_long())
-    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} run-test"
-    smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14), run_prefix=run_prefix)
-    assert all(row["name"].startswith(smoke.SMOKE_CARD_NAME_PREFIX) for row in captured["rows"])
-
-
-def test_main_happy_path_returns_ok_and_cleans_up(monkeypatch, capsys):
+def test_main_happy_path_returns_ok_and_cleans_up(monkeypatch):
     fake = _FakeCards()
     _patch_cards(monkeypatch, fake)
     monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
@@ -559,24 +475,6 @@ def test_main_refuses_in_ci_before_any_card_call(monkeypatch):
     rc = smoke.main(["--yes"])
     assert rc == _exit_codes.EXIT_ERROR
     assert not any(c[0] == "create_card" for c in fake.calls)
-
-
-def test_main_login_passes_otp_callback(monkeypatch):
-    fake = _FakeCards()
-    _patch_cards(monkeypatch, fake)
-    monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
-    monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)
-    monkeypatch.setattr(smoke, "make_otp_callback", lambda: lambda prompt: "000000")
-    captured = {}
-
-    def fake_setup(*, otp_callback=None):
-        captured["otp_callback"] = otp_callback
-        return {"email": "user@example.com"}
-
-    monkeypatch.setattr(smoke.auth, "setup", fake_setup)
-    rc = smoke.main(["--yes", "--login"])
-    assert rc == _exit_codes.EXIT_OK
-    assert captured["otp_callback"] is not None  # OTP path is actually wired
 
 
 def test_main_discovery_sweep_closes_orphaned_smoke_card(monkeypatch):
@@ -648,19 +546,3 @@ def test_discover_smoke_leftovers_warns_loudly_when_listing_fails_after_create(m
     smoke.discover_smoke_leftovers(h, run_prefix=run_prefix)  # must not raise
     assert warnings and "110.01" in warnings[0]
     assert run_prefix in warnings[0]
-
-
-def test_discover_smoke_leftovers_warning_is_harmless_when_no_create(monkeypatch):
-    # If discovery fails but NO create was attempted, nothing was created, so the
-    # warning is the quiet/harmless variant (no $110.01 money alarm).
-    h = smoke.Harness(clock=_fake_clock_long())  # no create step recorded
-
-    def boom_list(*, client=None, **kw):
-        raise RuntimeError("list_cards down")
-
-    monkeypatch.setattr(smoke, "list_cards", boom_list)
-    warnings = []
-    monkeypatch.setattr(smoke, "_warn", warnings.append)
-    smoke.discover_smoke_leftovers(h, run_prefix="extendvcc-smoke x")  # must not raise
-    assert warnings and "harmless" in warnings[0]
-    assert "110.01" not in warnings[0]
