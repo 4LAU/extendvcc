@@ -4,6 +4,9 @@ import pathlib
 import sys
 from types import SimpleNamespace
 
+from extendvcc import _exit_codes
+from extendvcc.auth import SessionNotFound
+from extendvcc.client import PayWithExtendDisabled, PayWithExtendError
 from extendvcc.models import CardStatus
 
 _SMOKE_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "smoke_test.py"
@@ -186,3 +189,48 @@ def test_cleanup_still_closes_when_cancel_fails():
     )
     assert ("close", "vc_cancel_4xx") in calls  # close attempted despite cancel failure
     assert leftovers == []  # a failed cancel alone is NOT a leftover; close succeeded
+
+
+def test_exit_code_ok_when_all_pass_and_no_leftovers():
+    results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", True, 0.2)]
+    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_OK
+
+
+def test_exit_code_api_error_on_failed_step_without_known_error():
+    results = [smoke.StepResult("a", True, 0.1), smoke.StepResult("b", False, 0.2, "boom")]
+    assert smoke.exit_code(results, leftovers=[], error=None) == _exit_codes.EXIT_API_ERROR
+
+
+def test_exit_code_maps_known_exceptions():
+    results = [smoke.StepResult("a", False, 0.1, "boom")]
+    assert smoke.exit_code(results, leftovers=[], error=PayWithExtendDisabled("x")) == _exit_codes.EXIT_DISABLED
+    assert smoke.exit_code(results, leftovers=[], error=SessionNotFound("x")) == _exit_codes.EXIT_AUTH_REQUIRED
+    # generic base PayWithExtendError (unexpected response shape) = live API drift
+    assert smoke.exit_code(results, leftovers=[], error=PayWithExtendError("x")) == _exit_codes.EXIT_API_ERROR
+    assert smoke.exit_code(results, leftovers=[], error=ValueError("x")) == _exit_codes.EXIT_ERROR
+
+
+def test_exit_code_error_when_leftover_card():
+    results = [smoke.StepResult("a", True, 0.1)]
+    # a leftover card outranks everything else
+    assert smoke.exit_code(results, leftovers=[("vc_x", "err")], error=None) == _exit_codes.EXIT_ERROR
+
+
+def test_format_summary_counts_and_marks():
+    results = [smoke.StepResult("auth", True, 0.10), smoke.StepResult("create", False, 0.20, "boom")]
+    text = smoke.format_summary(results, planned=5)
+    assert "auth" in text and "create" in text
+    assert "1/5" in text  # 1 passed of 5 planned
+
+
+def test_json_report_redacts_and_lists_cards():
+    results = [smoke.StepResult("auth", True, 0.1)]
+    report = smoke.json_report(results, planned=3, created=["vc_1"], leftovers=[])
+    assert report["passed"] == 1
+    assert report["planned"] == 3
+    assert report["created"] == ["vc_1"]
+    assert report["leftovers"] == []
+    # never serialize raw card data (real reveal keys are number/cvc/securityCode/vcn)
+    blob = repr(report)
+    assert "number" not in blob and "cvc" not in blob
+    assert "vcn" not in blob and "securityCode" not in blob

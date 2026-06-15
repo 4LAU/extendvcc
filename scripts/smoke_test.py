@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+from extendvcc import _exit_codes
+from extendvcc.auth import PayWithExtendAuthError
+from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
 from extendvcc.models import CardStatus
 
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
@@ -122,3 +125,64 @@ class Harness:
         for card_id, err in leftovers:
             warn(f"LEFTOVER smoke card {card_id} (${dollars:.2f}) not closed: {err} — close it manually")
         return leftovers
+
+
+def exit_code(
+    results: list[StepResult],
+    *,
+    leftovers: list[tuple[str, str]],
+    error: BaseException | None,
+) -> int:
+    # A leftover (un-closed) card is the most serious outcome — money may be at risk.
+    if leftovers:
+        return _exit_codes.EXIT_ERROR
+    if all(r.passed for r in results) and error is None:
+        return _exit_codes.EXIT_OK
+    # A step failed: classify by the terminating exception so the operator is
+    # pointed at the real cause (mostly mirrors the CLI's exception->exit-code
+    # mapping; base PayWithExtendError intentionally maps to EXIT_API_ERROR here,
+    # not the CLI's EXIT_ERROR, so API drift is loud in a release smoke test).
+    # Order: specific subclasses BEFORE the PayWithExtendError base class.
+    if isinstance(error, PayWithExtendDisabled):
+        return _exit_codes.EXIT_DISABLED
+    if isinstance(error, PayWithExtendAuthError):
+        return _exit_codes.EXIT_AUTH_REQUIRED
+    if isinstance(error, PayWithExtendAPIError):
+        return _exit_codes.EXIT_API_ERROR
+    # Generic PayWithExtendError = unexpected API response SHAPE = live drift,
+    # which is exactly what this harness exists to catch. Surface it as an API
+    # error, not the generic EXIT_ERROR used for harness/precondition bugs.
+    if isinstance(error, PayWithExtendError):
+        return _exit_codes.EXIT_API_ERROR
+    if error is not None:
+        return _exit_codes.EXIT_ERROR
+    return _exit_codes.EXIT_API_ERROR
+
+
+def format_summary(results: list[StepResult], *, planned: int) -> str:
+    lines = []
+    for r in results:
+        mark = "PASS" if r.passed else "FAIL"
+        suffix = f"  {r.detail}" if r.detail else ""
+        lines.append(f"  [{mark}] {r.name} ({r.seconds:.2f}s){suffix}")
+    passed = sum(1 for r in results if r.passed)
+    lines.append(f"{passed}/{planned} checks passed")
+    return "\n".join(lines)
+
+
+def json_report(
+    results: list[StepResult],
+    *,
+    planned: int,
+    created: list[str],
+    leftovers: list[tuple[str, str]],
+) -> dict:
+    return {
+        "planned": planned,
+        "passed": sum(1 for r in results if r.passed),
+        "steps": [
+            {"name": r.name, "passed": r.passed, "seconds": round(r.seconds, 3), "detail": r.detail} for r in results
+        ],
+        "created": list(created),
+        "leftovers": [{"card_id": cid, "error": err} for cid, err in leftovers],
+    }
