@@ -40,8 +40,20 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}*
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src/ tests/
+      - run: ruff format --check src/ tests/
+      - run: pytest tests/ -q
+
   release:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -51,3 +63,19 @@ jobs:
         with:
           files: extendvcc-*
           generate_release_notes: true
+
+  publish:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
