@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import email
 import imaplib
 import os
@@ -98,7 +99,7 @@ def fetch_otp(
         conn.login(imap_email, imap_password)
         conn.select("INBOX")
 
-        since_date = time.strftime("%d-%b-%Y", time.gmtime(since_timestamp))
+        since_date = time.strftime("%d-%b-%Y", time.localtime(since_timestamp - 86400))
 
         while time.monotonic() < deadline:
             conn.noop()
@@ -110,7 +111,7 @@ def fetch_otp(
                 _, date_data = conn.fetch(msg_id, "(INTERNALDATE)")
                 internal_date = imaplib.Internaldate2tuple(date_data[0])
                 if internal_date is not None:
-                    msg_epoch = time.mktime(internal_date)
+                    msg_epoch = calendar.timegm(internal_date)
                     if msg_epoch < since_timestamp - 5:
                         continue
 
