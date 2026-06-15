@@ -60,3 +60,28 @@ def test_expiry_in_future():
 def test_mask_last4():
     assert smoke.mask_last4("4242424242424242") == "****4242"
     assert smoke.mask_last4("12") == "****"
+
+
+def _fake_clock():
+    ticks = iter([0.0, 0.5, 1.0, 2.5, 3.0, 10.0])
+    return lambda: next(ticks)
+
+
+def test_step_records_pass_with_duration():
+    h = smoke.Harness(clock=_fake_clock())
+    h.step("alpha", lambda: None)
+    assert len(h.results) == 1
+    assert h.results[0].name == "alpha"
+    assert h.results[0].passed is True
+    assert h.results[0].seconds == 0.5
+
+
+def test_step_records_failure_and_reraises():
+    h = smoke.Harness(clock=_fake_clock())
+    import pytest
+
+    with pytest.raises(ValueError):
+        h.step("boom", lambda: (_ for _ in ()).throw(ValueError("nope")))
+    assert h.results[-1].name == "boom"
+    assert h.results[-1].passed is False
+    assert "nope" in h.results[-1].detail

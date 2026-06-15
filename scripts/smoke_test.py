@@ -11,7 +11,9 @@ Usage:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date
+from typing import Callable
 
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
@@ -52,3 +54,28 @@ def expiry_in_future(expires: str, today: date) -> bool:
 def mask_last4(number: str) -> str:
     digits = "".join(c for c in number if c.isdigit())
     return f"****{digits[-4:]}" if len(digits) >= 4 else "****"
+
+
+@dataclass
+class StepResult:
+    name: str
+    passed: bool
+    seconds: float
+    detail: str = ""
+
+
+class Harness:
+    def __init__(self, *, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self.results: list[StepResult] = []
+        self._created: list[str] = []
+        self._closed: set[str] = set()  # cards the lifecycle already tore down (mark_closed)
+
+    def step(self, name: str, fn: Callable[[], None]) -> None:
+        start = self._clock()
+        try:
+            fn()
+        except Exception as exc:
+            self.results.append(StepResult(name, False, self._clock() - start, repr(exc)))
+            raise
+        self.results.append(StepResult(name, True, self._clock() - start))
