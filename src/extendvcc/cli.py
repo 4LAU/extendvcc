@@ -23,7 +23,7 @@ from ._exit_codes import (
 )
 
 DISCLAIMER = (
-    "Unofficial and unaffiliated: extendvcc is a reverse-engineered client for "
+    "Unofficial and unaffiliated: extendvcc is an independent client for "
     "Extend's private API (api.paywithextend.com). It is not affiliated with, endorsed "
     "by, or supported by Extend, Inc. Automating their private API may get your account "
     "suspended. Use at your own risk."

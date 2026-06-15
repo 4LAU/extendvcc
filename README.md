@@ -9,7 +9,7 @@ Unofficial CLI and Python client for the Extend virtual card API.
 
 > **Disclaimer**
 >
-> This is an unofficial, reverse-engineered client for Extend's private browser
+> This is an unofficial, independent client for Extend's private browser
 > API (`api.paywithextend.com`). It is not affiliated with, endorsed by, or
 > supported by Extend, Inc. Use at your own risk. Your Extend account may be
 > suspended for using automation against their private API.
