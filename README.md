@@ -36,6 +36,11 @@ extendvcc accounts
 extendvcc cards
 ```
 
+Enrolling a parent card is a three-step lifecycle: `extendvcc enroll ...` registers
+the card and triggers an issuer verification email, you click the link in that email,
+then `extendvcc activate <id>` pulls the card from PENDING to ACTIVE. Re-run `activate`
+if it still reports PENDING.
+
 ## Create a One-Time Card
 
 ```bash
@@ -69,6 +74,39 @@ extendvcc reveal <card-id> --json-path creds.json
 ```
 
 `--json-path` writes the full PAN, CVC, and expiry to a file. Without it, the card number is masked on stdout. `--json` is a separate global flag that controls JSON output format; it does not write a file.
+
+## Dry Run
+
+Destructive commands accept `--dry-run` to preview the exact operation without
+touching the network or mutating anything:
+
+```bash
+extendvcc create --credit-card-id cc_x --name "Test" --balance-cents 5000 --valid-to 2026-12-31 --dry-run
+extendvcc bulk cards.csv --credit-card-id cc_x --dry-run
+extendvcc cancel <card-id> --dry-run
+extendvcc close <card-id> --dry-run
+extendvcc update <card-id> --balance-cents 9000 --dry-run
+```
+
+The would-be request body (or operation descriptor) is printed as JSON to **stdout**;
+the human-readable plan goes to **stderr**. So `extendvcc create ... --dry-run > body.json`
+captures just the JSON. `create`/`bulk` resolve the recipient locally (from `--recipient`,
+else the saved session) and never call the API; the preview is labelled `approximate`
+when the recipient falls back to a placeholder. `update --dry-run` performs only the
+read-only GET needed to show the accurate merged PUT body — no mutation.
+
+## Exit Codes
+
+The CLI uses stable exit codes so scripts and CI can branch on the outcome:
+
+| Code | Name           | Meaning                                                   |
+|------|----------------|-----------------------------------------------------------|
+| 0    | OK             | Success.                                                  |
+| 1    | ERROR          | Generic failure (library error, or an aborted confirmation). |
+| 2    | USAGE          | Bad flags or CLI input validation (e.g. missing `--valid-to`). |
+| 3    | AUTH_REQUIRED  | Login, OTP, or a saved session is required or failed.     |
+| 4    | DISABLED       | Kill switch tripped (account-risk); run `clear-disabled --manual`. |
+| 5    | API_ERROR      | Extend returned an error response.                        |
 
 ## Environment Variables
 
