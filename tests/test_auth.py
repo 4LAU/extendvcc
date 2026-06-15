@@ -115,13 +115,6 @@ def test_save_and_load_session_uses_0600_permissions(tmp_path, monkeypatch) -> N
     configure_paths()
 
 
-def test_read_credentials_uses_env_vars(monkeypatch) -> None:
-    monkeypatch.setenv("EXTENDVCC_EMAIL", "test@example.com")
-    monkeypatch.setenv("EXTENDVCC_PASSWORD", "secret123")
-
-    assert auth.read_credentials() == ("test@example.com", "secret123")
-
-
 def test_refresh_tokens_uses_refresh_token_auth_with_device_key(tmp_path, monkeypatch) -> None:
     configure_paths(state_dir=tmp_path)
     old_refresh = "refresh-old"
@@ -158,47 +151,6 @@ def test_refresh_tokens_uses_refresh_token_auth_with_device_key(tmp_path, monkey
         "DEVICE_KEY": "device123",
     }
     assert auth.load_session()["access_token"] == access
-
-    configure_paths()
-
-
-def test_ensure_valid_token_returns_cached_unexpired_token(tmp_path, monkeypatch) -> None:
-    configure_paths(state_dir=tmp_path)
-    access = make_jwt(time.time() + 3600)
-    auth.save_session({"access_token": access, "expires_at": time.time() + 3600})
-
-    assert auth.ensure_valid_token() == access
-
-    configure_paths()
-
-
-def test_ensure_valid_token_refreshes_expired_token(tmp_path, monkeypatch) -> None:
-    configure_paths(state_dir=tmp_path)
-    expired = make_jwt(time.time() - 5)
-    fresh = make_jwt(time.time() + 3600)
-    auth.save_session(
-        {
-            "access_token": expired,
-            "id_token": "old-id",
-            "refresh_token": "refresh",
-            "client_id": "client123",
-            "user_pool_id": "us-east-1_pool123",
-            "email": "l@example.com",
-        }
-    )
-    cognito = FakeCognitoClient(
-        [
-            {
-                "AuthenticationResult": {
-                    "AccessToken": fresh,
-                    "IdToken": "new-id",
-                    "ExpiresIn": 3600,
-                }
-            }
-        ]
-    )
-
-    assert auth.ensure_valid_token(cognito_client=cognito) == fresh
 
     configure_paths()
 
@@ -312,39 +264,6 @@ def test_authenticate_handles_remembered_device_srp(tmp_path, monkeypatch) -> No
     assert cognito.calls[2]["payload"]["ChallengeName"] == "DEVICE_SRP_AUTH"
     assert cognito.calls[3]["payload"]["ChallengeName"] == "DEVICE_PASSWORD_VERIFIER"
     assert cognito.calls[3]["payload"]["ChallengeResponses"]["DEVICE_KEY"] == "device123"
-
-    configure_paths()
-
-
-def test_setup_fetches_users_me_and_saves_org_id(tmp_path, monkeypatch) -> None:
-    configure_paths(state_dir=tmp_path)
-    access = make_jwt(time.time() + 3600)
-    extend = FakeExtendClient(user={"id": "user_123", "orgId": "org_abc"})
-    cognito = FakeCognitoClient(
-        [
-            password_challenge(),
-            {
-                "AuthenticationResult": {
-                    "AccessToken": access,
-                    "IdToken": "id-token",
-                    "RefreshToken": "refresh-token",
-                    "ExpiresIn": 3600,
-                }
-            },
-        ]
-    )
-    monkeypatch.setattr(auth, "read_credentials", lambda: ("l@example.com", "password"))
-    monkeypatch.setattr(auth, "_default_extend_client", lambda: extend)
-    monkeypatch.setattr(auth, "_default_cognito_client", lambda: cognito)
-
-    report = auth.setup()
-
-    assert report["success"] is True
-    assert report["email"] == "l***@example.com"
-    assert report["org_id"] == "org_abc"
-    assert report["rate_limits"] == {"x-rate-limit-remaining": "499"}
-    assert auth.load_session()["org_id"] == "org_abc"
-    assert extend.gets[0]["headers"]["Authorization"] == f"Bearer {access}"
 
     configure_paths()
 

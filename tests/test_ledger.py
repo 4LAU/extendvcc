@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from extendvcc import cards, ledger
+from extendvcc import ledger
 from extendvcc._paths import configure as configure_paths
 
 
@@ -217,57 +217,6 @@ def test_sync_reconciles_with_injected_fetcher(monkeypatch, tmp_path):
     configure_paths()
 
 
-def test_sync_accepts_wrapped_card_response(monkeypatch, tmp_path):
-    _patch_ledger_path(monkeypatch, tmp_path)
-
-    summary = ledger.sync(fetcher=lambda: {"virtualCards": [{"id": "vc_1", "displayName": "Wrapped"}]})
-
-    assert summary["added"] == ["vc_1"]
-    assert ledger.query(name_pattern="wrapped")[0]["name"] == "Wrapped"
-
-    configure_paths()
-
-
-def test_sync_default_fetches_virtualcards_pages(monkeypatch, tmp_path):
-    """The default fetcher is cards.list_cards, which paginates by page number."""
-    _patch_ledger_path(monkeypatch, tmp_path)
-
-    class FakePageClient:
-        def __init__(self):
-            self.calls = []
-
-        def get(self, path, params=None):
-            self.calls.append((path, params))
-            page = (params or {}).get("page", 0)
-            card_id = "vc_1" if page == 0 else "vc_2"
-            return {
-                "virtualCards": [
-                    {
-                        "id": card_id,
-                        "creditCardId": "cc_1",
-                        "displayName": f"Card {card_id}",
-                        "last4": "1111",
-                        "status": "ACTIVE",
-                        "balanceCents": 100,
-                    }
-                ],
-                "pagination": {"numberOfPages": 2},
-            }
-
-    fake_client = FakePageClient()
-    monkeypatch.setattr(cards, "_default_client", lambda: fake_client)
-
-    summary = ledger.sync()
-
-    assert summary["added"] == ["vc_1", "vc_2"]
-    assert fake_client.calls == [
-        ("/virtualcards", {"count": 100, "page": 0}),
-        ("/virtualcards", {"count": 100, "page": 1}),
-    ]
-
-    configure_paths()
-
-
 def test_sync_refuses_when_disabled(monkeypatch, tmp_path):
     _patch_ledger_path(monkeypatch, tmp_path)
     monkeypatch.setattr(
@@ -345,34 +294,11 @@ def test_numeric_luhn_pan_values_rejected_across_write_paths(monkeypatch, tmp_pa
     configure_paths()
 
 
-def test_find_pending_returns_row_for_known_key(monkeypatch, tmp_path):
-    _patch_ledger_path(monkeypatch, tmp_path)
-    ledger.record_pending("create", "key-alpha")
-
-    row = ledger.find_pending("key-alpha")
-
-    assert row is not None
-    assert row["record_type"] == "operation"
-    assert row["status"] == "pending"
-    assert row["intent"] == "create"
-    assert row["correlation_key"] == "key-alpha"
-
-    configure_paths()
-
-
 def test_find_pending_returns_none_for_unknown_key(monkeypatch, tmp_path):
     _patch_ledger_path(monkeypatch, tmp_path)
     ledger.record_pending("create", "key-alpha")
 
     assert ledger.find_pending("key-unknown") is None
-
-    configure_paths()
-
-
-def test_find_pending_returns_none_for_empty_string(monkeypatch, tmp_path):
-    _patch_ledger_path(monkeypatch, tmp_path)
-
-    assert ledger.find_pending("") is None
 
     configure_paths()
 

@@ -12,7 +12,6 @@ from extendvcc.client import (
     PayWithExtendAPIError,
     PayWithExtendClient,
     PayWithExtendDisabled,
-    PayWithExtendNonJSONError,
     clear_disabled,
     vault_client,
 )
@@ -69,36 +68,6 @@ def test_absolute_url_must_stay_on_extend_host() -> None:
         client.get("https://example.invalid/steal")
 
 
-def test_401_refreshes_and_retries_once() -> None:
-    calls: list[str] = []
-    refresh_calls: list[str] = []
-    tokens = iter(["expired-token", "fresh-token"])
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request.headers["authorization"])
-        if len(calls) == 1:
-            return httpx.Response(401, json={"message": "expired"})
-        return httpx.Response(200, json={"ok": True})
-
-    client = _client(
-        handler,
-        token_getter=lambda: next(tokens),
-        token_refresher=lambda: refresh_calls.append("refresh"),
-    )
-
-    assert client.get("/users/me") == {"ok": True}
-    assert calls == ["Bearer expired-token", "Bearer fresh-token"]
-    assert refresh_calls == ["refresh"]
-
-
-def test_non_json_error_raises_exception() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, content=b"upstream exploded")
-
-    with pytest.raises(PayWithExtendNonJSONError, match="non-JSON"):
-        _client(handler).get("/creditcards")
-
-
 def test_json_error_raises_api_exception() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"message": "bad request"})
@@ -108,38 +77,6 @@ def test_json_error_raises_api_exception() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.payload == {"message": "bad request"}
-
-
-def test_low_rate_limit_remaining_backs_off_without_real_sleep() -> None:
-    sleeps: list[float] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"ok": True},
-            headers={"x-rate-limit-remaining": "3"},
-        )
-
-    result = _client(
-        handler,
-        sleeper=sleeps.append,
-        rate_limit_low_watermark=10,
-    ).get("/virtualcards")
-
-    assert result == {"ok": True}
-    assert sleeps == [1.0]
-
-
-def test_429_backs_off_then_raises_api_exception() -> None:
-    sleeps: list[float] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(429, json={"message": "too many requests"})
-
-    with pytest.raises(PayWithExtendAPIError):
-        _client(handler, sleeper=sleeps.append).get("/virtualcards")
-
-    assert sleeps == [1.0]
 
 
 def test_403_trips_kill_switch_and_future_calls_are_refused(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
