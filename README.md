@@ -146,6 +146,12 @@ See `extendvcc.__init__` for the full list of exported functions and models.
 - Session tokens are stored locally with restricted permissions.
 - All HTTP uses Chrome TLS fingerprinting via `impit`.
 
+### Release smoke test
+
+Before tagging a release, run the live smoke test against a real account to confirm
+the tool still agrees with Extend's API: see [docs/smoke-testing.md](docs/smoke-testing.md).
+The offline `pytest` suite never touches the network; this is the layer that does.
+
 ## License
 
 [MIT](LICENSE)
