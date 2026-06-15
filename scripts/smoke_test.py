@@ -10,6 +10,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -186,3 +187,27 @@ def json_report(
         "created": list(created),
         "leftovers": [{"card_id": cid, "error": err} for cid, err in leftovers],
     }
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="smoke_test",
+        description="Live smoke test against the REAL Extend API. Creates and closes a $110.01 card.",
+    )
+    parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Force a full cold login (auth.setup) first, exercising the first-login/OTP path "
+        "instead of reusing a saved session. Needs EXTENDVCC_EMAIL/PASSWORD/IMAP_*.",
+    )
+    parser.add_argument("--parent", default=None, help="Parent credit-card id (default: first active)")
+    parser.add_argument("--bulk", type=int, default=0, help="Also create/close K cards via the bulk path")
+    parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report")
+    return parser.parse_args(argv)
+
+
+def confirm(*, assume_yes: bool, reader: Callable[[], str]) -> bool:
+    if assume_yes:
+        return True
+    return reader().strip().lower() in ("y", "yes")

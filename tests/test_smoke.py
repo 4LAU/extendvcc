@@ -234,3 +234,36 @@ def test_json_report_redacts_and_lists_cards():
     blob = repr(report)
     assert "number" not in blob and "cvc" not in blob
     assert "vcn" not in blob and "securityCode" not in blob
+
+
+def test_parse_args_defaults():
+    ns = smoke.parse_args([])
+    assert ns.yes is False
+    assert ns.login is False
+    assert ns.parent is None
+    assert ns.bulk == 0
+    assert ns.json is False
+
+
+def test_parse_args_all_flags():
+    ns = smoke.parse_args(["--yes", "--login", "--parent", "cc_123", "--bulk", "3", "--json"])
+    assert ns.yes is True
+    assert ns.login is True
+    assert ns.parent == "cc_123"
+    assert ns.bulk == 3
+    assert ns.json is True
+
+
+def test_confirm_returns_true_when_yes_flag_set():
+    # --yes bypasses the prompt entirely (input callable must not be called)
+    def boom():
+        raise AssertionError("prompt should be skipped")
+
+    assert smoke.confirm(assume_yes=True, reader=boom) is True
+
+
+def test_confirm_reads_yes_no():
+    assert smoke.confirm(assume_yes=False, reader=lambda: "yes") is True
+    assert smoke.confirm(assume_yes=False, reader=lambda: "y") is True
+    assert smoke.confirm(assume_yes=False, reader=lambda: "no") is False
+    assert smoke.confirm(assume_yes=False, reader=lambda: "") is False
