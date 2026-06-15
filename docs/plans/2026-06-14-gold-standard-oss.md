@@ -41,16 +41,9 @@ CLAUDE.md becomes the Claude-specific supplement; AGENTS.md is the universal con
 
 ### 3. Fill pyproject.toml metadata
 
-Add:
+Add under `[project]` (before `[project.optional-dependencies]`):
 ```toml
 authors = [{name = "4LAU"}]
-
-[project.urls]
-Homepage = "https://github.com/4LAU/extendvcc"
-Repository = "https://github.com/4LAU/extendvcc"
-Issues = "https://github.com/4LAU/extendvcc/issues"
-Changelog = "https://github.com/4LAU/extendvcc/blob/main/CHANGELOG.md"
-
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
@@ -60,9 +53,19 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
     "Typing :: Typed",  # Requires adding src/extendvcc/py.typed marker (PEP 561)
 ]
-
 keywords = ["extend", "virtual-card", "fintech", "cli"]
 ```
+
+Then add a separate `[project.urls]` table (after `[project.optional-dependencies]` or after `[project.scripts]`):
+```toml
+[project.urls]
+Homepage = "https://github.com/4LAU/extendvcc"
+Repository = "https://github.com/4LAU/extendvcc"
+Issues = "https://github.com/4LAU/extendvcc/issues"
+Changelog = "https://github.com/4LAU/extendvcc/blob/main/CHANGELOG.md"
+```
+
+**TOML ordering matters:** `classifiers` and `keywords` are `[project]` keys. Placing them after a `[project.urls]` header would make them URL entries, breaking `python -m build`. Keep scalar/array keys under `[project]` before any sub-table headers.
 
 ### 4. Create CHANGELOG.md
 
@@ -143,12 +146,13 @@ Update `cli.py` exception handlers and command returns to use these codes. Docum
 5. `ValueError` → **do not catch broadly as USAGE.** Library-internal `ValueError` raises (e.g., `org_id` missing in `usage()`, absolute URL refusal in `client.py`) are not CLI user-input errors. Either: (a) introduce a typed `CLIInputError(ValueError)` for CLI-layer validation and map only that to exit 2, or (b) convert CLI-owned validation `print()+return 1` to `sys.exit(EXIT_USAGE)` directly in each handler, leaving library `ValueError` to fall through to exit 1 (ERROR)
 6. `argparse` bad-input: override `parser.error()` to call `sys.exit(2)` instead of the default `sys.exit(2)` (accidental match, but make it explicit via the exit code constant)
 7. No-subcommand path: `main()` currently returns `1` when no command is provided (line 607). This is a usage error, not a runtime error — return `EXIT_USAGE` (2). Similarly, all CLI-owned validation failures (mutually exclusive `create` flags, empty bulk CSV, missing update fields, missing `clear-disabled --manual`) should use `EXIT_USAGE` consistently, not `return 1`.
+8. **Auth HTTP exceptions escape the catch chain.** `auth._raise_for_status()` calls `resp.raise_for_status()`, which raises impit/httpx-native exceptions (e.g., `httpx.HTTPStatusError`), NOT project exceptions. This affects Cognito calls (`_initiate_auth`, `_respond_to_auth_challenge`, `_call_cognito`) and `/users/me` (`fetch_current_user`). These are the most common failure paths (bad credentials, Cognito rejection, expired refresh). Fix: wrap `_raise_for_status()` to convert non-2xx HTTP responses into `PayWithExtendAuthError` (for Cognito paths) or `PayWithExtendAPIError` (for Extend API paths like `/authconfig`, `/users/me`). Without this, "stable exit codes" are not stable on auth failures. Add CLI tests for authconfig 400/500, Cognito 400, and `/users/me` 500 to Group D.
 
 ### 11. --dry-run on destructive commands
 
 Add `--dry-run` flag to: `create`, `bulk`, `cancel`, `close`, `update`.
 
-**Prerequisite: extract pure payload builders in `cards.py`.** The request body for `create_card()` is currently assembled inline (UUID correlation suffix, `account_context()` recipient resolution, recurrence payload) immediately before dispatch. `update_card()` builds its PUT body after a read-modify-write GET. If dry-run logic lives in `cli.py`, it will duplicate this shaping and inevitably diverge. Extract `build_create_card_payload(...)`, `build_update_card_payload(raw, overrides)`, etc. as pure functions. Both dry-run and real mutations call the same builders.
+**Prerequisite: extract operation builders (not just payload builders) in `cards.py`.** The request body for `create_card()` is currently assembled inline (UUID correlation suffix, `account_context()` recipient resolution, recurrence payload) immediately before dispatch. `update_card()` builds its PUT body after a read-modify-write GET. If dry-run logic lives in `cli.py`, it will duplicate this shaping and inevitably diverge. Extract `build_create_card_operation(...)`, `build_update_card_operation(raw, overrides)`, etc. that return an operation descriptor: `{path, method, body, correlation_key, preview_accuracy}`. Both dry-run and real mutations call the same builders. The correlation key (UUID suffix in `displayName`) must be part of the operation object — a body-only builder would generate a different UUID on dry-run vs. real run, making the preview misleading. Accept injected `recipient_resolver` and `token_factory` so dry-run can substitute non-network paths.
 
 Behavior varies by command:
 - **create / bulk:** call the shared builder to produce the full request body without dispatch. Print the operation plan (card name, amount, target card ID) to stderr, print the would-be request body to stdout as JSON, exit 0. No API call made.
@@ -166,6 +170,8 @@ Fix: when `--json` is passed, ONLY structured JSON goes to stdout. All human mes
 Implementation: introduce a `_info(msg)` helper that prints to stderr, replace bare `print()` calls for non-data output in --json code paths. **Also fix `_confirm()`**: Python's `input(prompt)` writes the prompt to stdout; change to `print(prompt, end="", file=sys.stderr); input()` so confirmation prompts don't pollute JSON output. Similarly, route all pre-result prints (operation summaries in `create`, warnings in `close`) through `_info()` unconditionally — they are human-oriented and belong on stderr regardless of `--json`.
 
 **Also fix login and OTP prompts:** `_cmd_login()` uses `input("Email: ")` which writes the prompt to stdout. `make_otp_callback()` returns `input` or `input("IMAP retrieval timed out...")` — both write prompts to stdout. These contaminate JSON output on the most common first-run path (`login`). Use the same `_info()` + bare `input()` pattern for all interactive prompts: email, password (already via `getpass`), OTP fallback, and confirmation. Add CLI tests for `extendvcc --json login` verifying no prompt text appears on stdout.
+
+**Also fix parser help output:** `parser.print_help()` in the no-subcommand path (and the unknown-handler fallback) writes to stdout by default. Under `--json`, this violates the JSON-only-on-stdout contract. Fix: when `--json` is set, either redirect help to stderr (`parser.print_help(sys.stderr)`) or call `parser.error("no command specified")` which writes to stderr and exits. Add a CLI test for `main(["--json"])` asserting stdout is empty and exit code is `EXIT_USAGE`.
 
 ## Non-goals
 
