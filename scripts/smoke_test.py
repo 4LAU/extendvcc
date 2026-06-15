@@ -45,7 +45,15 @@ SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cle
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
 LIFECYCLE_STEPS = 10
 
+# list_cards() is eventually consistent: a just-created card is fetchable by id
+# (get_card, a strong read) immediately, but can lag a few seconds before it
+# appears in the list index. The list step retries with this budget before
+# declaring drift, so propagation lag is not misreported as a missing card.
+LIST_RETRY_ATTEMPTS = 6
+LIST_RETRY_DELAY_SECONDS = 2.5
+
 _monotonic = time.monotonic  # patchable seam for deterministic tests
+_sleep = time.sleep  # patchable seam so tests don't actually wait on retries
 
 # CI env markers — this live, money-touching script must never run in CI.
 _CI_ENV_MARKERS = ("CI", "GITHUB_ACTIONS", "BUILDKITE", "CIRCLECI", "GITLAB_CI", "JENKINS_URL", "TF_BUILD")
@@ -75,10 +83,13 @@ def cvc_valid(cvc: str) -> bool:
 
 
 def expiry_in_future(expires: str, today: date) -> bool:
-    # Anchored fullmatch so trailing junk (e.g. "2027-99junk") cannot pass, and
-    # the month must be a real 01-12 — this is a drift detector, so a malformed
-    # live expiry must FAIL, not silently slip through a permissive parser.
-    match = re.fullmatch(r"(\d{4})-(\d{2})(?:-\d{2})?", expires.strip())
+    # The vault's reveal `expires` is a full ISO-8601 datetime, e.g.
+    # "2029-09-02T00:00:00.000+0000" (see extendvcc's own reveal_card tests),
+    # though a plain "YYYY-MM" occurs elsewhere. Match the leading year-month
+    # (start-anchored, NOT fullmatch, so the day/time/zone suffix is allowed) and
+    # require a real 01-12 month — this is still a drift detector, so a non-date
+    # or out-of-range expiry FAILS rather than slipping through.
+    match = re.match(r"(\d{4})-(\d{2})", expires.strip())
     if not match:
         return False
     year, month = int(match.group(1)), int(match.group(2))
@@ -273,9 +284,16 @@ def run_lifecycle(harness: Harness, *, parent_id: str | None, today: date, run_p
             raise SmokeError(f"created card balance {card.balance_cents} != {SMOKE_CARD_BALANCE_CENTS}")
 
     def _list():
-        ids = {c.id for c in list_cards()}
-        if state["card_id"] not in ids:
-            raise SmokeError("created card not present in list_cards()")
+        # list_cards() is eventually consistent (see LIST_RETRY_* above): the card
+        # the get step just fetched by id may not be in the list index yet. Retry
+        # with a bounded backoff so a propagation lag is not misreported as drift.
+        for attempt in range(LIST_RETRY_ATTEMPTS):
+            ids = {c.id for c in list_cards()}
+            if state["card_id"] in ids:
+                return
+            if attempt + 1 < LIST_RETRY_ATTEMPTS:
+                _sleep(LIST_RETRY_DELAY_SECONDS)
+        raise SmokeError(f"created card not present in list_cards() after {LIST_RETRY_ATTEMPTS} attempts")
 
     def _reveal():
         creds = reveal_card(state["card_id"])  # returns {"number","cvc","last4","expires"}

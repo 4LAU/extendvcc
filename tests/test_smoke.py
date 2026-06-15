@@ -60,9 +60,12 @@ def test_expiry_in_future():
     assert smoke.expiry_in_future("2026-06", today) is True  # same month counts
     assert smoke.expiry_in_future("2026-05", today) is False
     assert smoke.expiry_in_future("not-a-date", today) is False
-    assert smoke.expiry_in_future("2027-99junk", today) is False  # month out of range / trailing junk
+    assert smoke.expiry_in_future("2027-99junk", today) is False  # month out of range
     assert smoke.expiry_in_future("2027-13", today) is False  # month > 12
     assert smoke.expiry_in_future("2027-00", today) is False  # month < 1
+    # Real vault reveal format is a full ISO-8601 datetime — must parse, not reject.
+    assert smoke.expiry_in_future("2029-09-02T00:00:00.000+0000", today) is True
+    assert smoke.expiry_in_future("2025-12-31T00:00:00.000+0000", today) is False  # past, full ISO
 
 
 def _fake_clock():
@@ -432,6 +435,47 @@ def test_run_lifecycle_reveal_rejects_invalid_card_data(monkeypatch):
     with pytest.raises(smoke.SmokeError):
         smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
     assert any(r.name == "reveal" and not r.passed for r in h.results)
+
+
+def test_run_lifecycle_list_step_retries_until_card_appears(monkeypatch):
+    # list_cards() is eventually consistent: a just-created card may be absent on
+    # the first call and appear on a later one. The list step must retry (with a
+    # sleep between attempts) rather than fail on propagation lag.
+    fake = _FakeCards()
+    attempts = {"n": 0}
+
+    def flaky_list(*, client=None, **kw):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return []  # card not yet propagated to the list index
+        return [_vcard("vc_new", "n")]
+
+    fake.list_cards = flaky_list
+    _patch_cards(monkeypatch, fake)
+    sleeps = []
+    monkeypatch.setattr(smoke, "_sleep", sleeps.append)  # don't actually wait
+    h = smoke.Harness(clock=_fake_clock_long())
+    smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
+    assert any(r.name == "list" and r.passed for r in h.results)
+    assert attempts["n"] >= 2  # retried at least once
+    assert sleeps == [smoke.LIST_RETRY_DELAY_SECONDS]  # slept once between the two attempts
+
+
+def test_run_lifecycle_list_step_fails_after_exhausting_retries(monkeypatch):
+    import pytest
+
+    # If the card never appears, the list step must still fail (drift detected),
+    # after exhausting the retry budget — without sleeping after the final attempt.
+    fake = _FakeCards()
+    fake.list_cards = lambda *, client=None, **kw: []  # never propagates
+    _patch_cards(monkeypatch, fake)
+    sleeps = []
+    monkeypatch.setattr(smoke, "_sleep", sleeps.append)
+    h = smoke.Harness(clock=_fake_clock_long())
+    with pytest.raises(smoke.SmokeError):
+        smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
+    assert any(r.name == "list" and not r.passed for r in h.results)
+    assert len(sleeps) == smoke.LIST_RETRY_ATTEMPTS - 1  # no sleep after the last attempt
 
 
 def test_run_bulk_calls_real_bulk_helper_and_registers_each_card(monkeypatch):
