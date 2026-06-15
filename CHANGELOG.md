@@ -10,6 +10,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ---
 
+## [0.1.1] - 2026-06-15
+
+### Fixed
+
+- First-time login failed at device registration with `Found negative value for salt or password verifier`. The device SRP salt and password verifier are now zero-padded so Cognito never reads them as negative.
+- Authentication errors now include Cognito's error type and message instead of only a status code, so failures report the real reason.
+
+---
+
 ## [0.1.0] - 2026-06-14
 
 ### Added
@@ -28,5 +37,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Python API:** public re-exports in `extendvcc.__init__` for programmatic use.
 - **Typed:** `py.typed` marker (PEP 561); type hints throughout.
 
-[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/4LAU/extendvcc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/4LAU/extendvcc/releases/tag/v0.1.0
