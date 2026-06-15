@@ -126,9 +126,31 @@ def _response_json(resp: Any) -> Any:
     return json.loads(text)
 
 
-def _raise_for_status(resp: Any) -> None:
-    if hasattr(resp, "raise_for_status"):
-        resp.raise_for_status()
+def _raise_for_status(resp: Any, *, kind: str = "auth", path: str | None = None) -> None:
+    """Turn a non-2xx response into a typed PROJECT exception.
+
+    The impit/httpx-native ``raise_for_status`` raises library exceptions that
+    escape the project's catch chain (auth errors map to exit codes via these
+    types). So we inspect ``status_code`` ourselves and raise:
+
+    - ``kind="auth"`` (Cognito calls) -> ``PayWithExtendAuthError``
+    - ``kind="api"`` (Extend API calls) -> ``PayWithExtendAPIError`` (with status)
+
+    Fakes that lack ``status_code`` are tolerated (treated as success), preserving
+    offline test fixtures whose default status is 200.
+    """
+    status_code = int(getattr(resp, "status_code", 0) or 0)
+    if status_code < 400:
+        return
+    if kind == "api":
+        from .client import PayWithExtendAPIError
+
+        raise PayWithExtendAPIError(
+            f"PayWithExtend API request failed: {status_code} {path or ''}".rstrip(),
+            status_code=status_code,
+            path=path or "",
+        )
+    raise PayWithExtendAuthError(f"PayWithExtend Cognito request failed with status {status_code}")
 
 
 def _inspect_account_risk(resp: Any, path: str) -> None:
@@ -189,7 +211,7 @@ def fetch_authconfig(email: str, client: Any | None = None) -> dict[str, str]:
         timeout=30,
     )
     _inspect_account_risk(resp, "/authconfig")
-    _raise_for_status(resp)
+    _raise_for_status(resp, kind="api", path="/authconfig")
 
     raw_payload: Any
     try:
@@ -810,7 +832,7 @@ def fetch_current_user(access_token: str, client: Any | None = None) -> tuple[di
         timeout=30,
     )
     _inspect_account_risk(resp, "/users/me")
-    _raise_for_status(resp)
+    _raise_for_status(resp, kind="api", path="/users/me")
     payload = _response_json(resp)
     if not isinstance(payload, dict):
         raise PayWithExtendAuthError("PayWithExtend /users/me returned a non-object response")
@@ -863,8 +885,13 @@ def _setup_report(session: Mapping[str, Any], user: Mapping[str, Any], headers: 
     }
 
 
-def setup(otp_callback: Callable[[str], str] | None = None) -> dict[str, Any]:
-    session = authenticate(otp_callback=otp_callback, save=False)
+def setup(
+    *,
+    email: str | None = None,
+    password: str | None = None,
+    otp_callback: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    session = authenticate(email=email, password=password, otp_callback=otp_callback, save=False)
     user, headers = fetch_current_user(session["access_token"])
     org_id = extract_org_id(user)
     if org_id:

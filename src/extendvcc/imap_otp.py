@@ -7,6 +7,7 @@ import email
 import imaplib
 import os
 import re
+import sys
 import time
 from collections.abc import Callable
 from email.header import decode_header
@@ -143,17 +144,27 @@ def fetch_otp(
             pass
 
 
+def _prompt_stdin(prompt: str) -> str:
+    """Read a line from stdin after writing the prompt to stderr.
+
+    Keeps stdout clean: under ``--json`` only structured data may reach stdout,
+    so interactive prompt text must go to stderr.
+    """
+    print(prompt, end="", file=sys.stderr, flush=True)
+    return input()
+
+
 def make_otp_callback() -> Callable[[str], str]:
     """Return an OTP callback: IMAP auto-retrieval if configured, stdin prompt if not."""
     creds = read_imap_credentials()
     if creds is None:
-        return input
+        return _prompt_stdin
 
     def _imap_callback(_prompt: str) -> str:
         since = time.time() - 300
         code = fetch_otp(since, _credentials=creds)
         if code is None:
-            return input("IMAP retrieval timed out. Enter OTP manually: ")
+            return _prompt_stdin("IMAP retrieval timed out. Enter OTP manually: ")
         return code
 
     return _imap_callback
