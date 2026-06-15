@@ -22,6 +22,13 @@ from ._exit_codes import (
     EXIT_USAGE,
 )
 
+DISCLAIMER = (
+    "Unofficial and unaffiliated: extendvcc is a reverse-engineered client for "
+    "Extend's private API (api.paywithextend.com). It is not affiliated with, endorsed "
+    "by, or supported by Extend, Inc. Automating their private API may get your account "
+    "suspended. Use at your own risk."
+)
+
 
 class CLIInputError(ValueError):
     """Raised for CLI-layer input/usage errors (maps to EXIT_USAGE).
@@ -81,6 +88,10 @@ def _prompt(prompt: str) -> str:
 def _cmd_login(args: argparse.Namespace) -> int:
     from . import auth
     from .imap_otp import make_otp_callback
+
+    # Surface the unofficial/at-your-own-risk notice at the start of real usage.
+    _info(DISCLAIMER)
+    _info()
 
     email = args.email or os.environ.get("EXTENDVCC_EMAIL") or _prompt("Email: ")
     # getpass writes its prompt to stderr, so stdout stays clean.
@@ -667,6 +678,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(
         prog="extendvcc",
         description="Unofficial CLI for the Extend virtual card API.",
+        epilog=DISCLAIMER,
     )
     parser.add_argument("--state-dir", default=None, help="Override state directory")
     parser.add_argument("--ledger", default=None, help="Override ledger file path")
