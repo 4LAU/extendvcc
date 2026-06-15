@@ -16,6 +16,7 @@
 
 - `scripts/smoke_test.py` — the harness. Import-safe (no network at import; live walk only under `main()`). Holds: constants, pure validators, `StepResult`, `Harness` (step runner + cleanup tracker), output/exit-code helpers, argument parser, the lifecycle orchestration, and `main()`.
 - `tests/test_smoke.py` — offline unit tests for every pure helper and for the orchestration sequence/cleanup (via monkeypatched card functions). Loads the script by file path with `importlib` since `scripts/` is not a package.
+  - **Import placement (ruff `E402`/`I`):** the per-task code blocks below say "append" to describe the TDD build order, NOT the physical line position. ALL module-level imports (`datetime`, `itertools`, `types.SimpleNamespace`, `extendvcc._exit_codes`, `extendvcc.auth`, `extendvcc.client`, `extendvcc.models`, etc.) MUST live in one sorted block at the TOP of the file, above `_load_smoke()` and `smoke = _load_smoke()`. Ruff selects `E`, `F`, `W`, `I`; a module-level `import`/`from` after executable code trips `E402`, and an out-of-order block trips `I`. As each task adds a new import, hoist it into that top block rather than leaving it inline after test definitions. (`import pytest` inside individual test bodies is a deliberate local import and is fine.) The Task 10 `ruff check` gate is the backstop, but hoist as you go so it passes first try.
 - `docs/smoke-testing.md` — how to run it, what it does, the coverage table.
 - `README.md` — add a short "Release smoke test" pointer.
 - `CONTRIBUTING.md` — note the harness must be run before tagging a release.
@@ -259,7 +260,7 @@ Expected: FAIL (`Harness` not defined).
 
 ```python
 # scripts/smoke_test.py — append
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 
