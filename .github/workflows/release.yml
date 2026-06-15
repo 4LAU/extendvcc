@@ -10,14 +10,15 @@ permissions:
 jobs:
   build:
     strategy:
+      # One platform failing must not cancel the others; the release attaches
+      # whatever built. Intel macOS (macos-13) is intentionally dropped: the
+      # runner pool is scarce and being retired, and pip/pipx covers that case.
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             arch: arm64
             artifact: extendvcc-macos-arm64
-          - os: macos-13
-            arch: x86_64
-            artifact: extendvcc-macos-x86_64
           - os: ubuntu-latest
             arch: x86_64
             artifact: extendvcc-linux-x86_64
@@ -54,6 +55,9 @@ jobs:
 
   release:
     needs: [build, test]
+    # Run once builds finish even if a platform failed, as long as tests passed,
+    # so a single bad/slow binary never blocks the GitHub release.
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
