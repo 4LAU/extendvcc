@@ -1174,5 +1174,3 @@ def test_create_card_one_time_still_builds_validto(monkeypatch, tmp_path):
     assert "recurs" not in body
     assert "recurrence" not in body
     configure_paths()
-
-
