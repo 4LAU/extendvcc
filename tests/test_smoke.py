@@ -65,11 +65,6 @@ def test_expiry_in_future():
     assert smoke.expiry_in_future("2027-00", today) is False  # month < 1
 
 
-def test_mask_last4():
-    assert smoke.mask_last4("4242424242424242") == "****4242"
-    assert smoke.mask_last4("12") == "****"
-
-
 def _fake_clock():
     ticks = iter([0.0, 0.5, 1.0, 2.5, 3.0, 10.0])
     return lambda: next(ticks)
@@ -581,9 +576,9 @@ def test_main_bulk_partial_failure_card_is_still_closed_via_sweep(monkeypatch):
         fake.calls.append(("create_cards_bulk", parent, len(rows)))
         raise RuntimeError("bulk item 1 failed after item 0 was created")
 
-    fake.create_cards_bulk = exploding_bulk
     fake.list_cards = lambda *, client=None, **kw: [_vcard("vc_new", run_prefix), orphan]
     _patch_cards(monkeypatch, fake)
+    # create_cards_bulk is not part of _patch_cards (not a lifecycle fn); patch it directly.
     monkeypatch.setattr(smoke, "create_cards_bulk", exploding_bulk)
     monkeypatch.setattr(smoke, "_monotonic", _fake_clock_long())
     monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)

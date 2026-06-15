@@ -87,11 +87,6 @@ def expiry_in_future(expires: str, today: date) -> bool:
     return (year, month) >= (today.year, today.month)
 
 
-def mask_last4(number: str) -> str:
-    digits = "".join(c for c in number if c.isdigit())
-    return f"****{digits[-4:]}" if len(digits) >= 4 else "****"
-
-
 def select_parent(credit_cards: list[CreditCard], *, requested: str | None) -> str:
     by_id = {c.id: c for c in credit_cards}
     if requested is not None:
