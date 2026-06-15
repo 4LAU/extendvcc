@@ -384,7 +384,7 @@ def test_update_dry_run_no_put(monkeypatch, capsys):
 def test_close_cancel_aborts_without_mutation(monkeypatch, capsys):
     """Invariant: close without --yes, answered 'n', does not call close_card; prompt on stderr."""
     monkeypatch.setattr("extendvcc.cards.close_card", _bang)
-    monkeypatch.setattr("builtins.input", lambda: "n")
+    monkeypatch.setattr("builtins.input", lambda *_: "n")
 
     code = main(["close", "vc_1"])
     captured = capsys.readouterr()
