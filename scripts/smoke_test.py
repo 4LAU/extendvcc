@@ -23,6 +23,7 @@ from extendvcc.cards import (
     cancel_card,
     close_card,
     create_card,
+    create_cards_bulk,
     get_card,
     list_cards,
     list_credit_cards,
@@ -316,3 +317,28 @@ def run_lifecycle(harness: Harness, *, parent_id: str | None, today: date, run_p
     harness.step("usage", _usage)
     harness.step("cancel", _cancel)
     harness.step("close", _close)
+
+
+def run_bulk(harness: Harness, *, parent_id: str | None, count: int, today: date, run_prefix: str) -> None:
+    def _bulk():
+        parent = parent_id or select_parent(list_credit_cards(), requested=None)
+        valid_to = (today + timedelta(days=3)).isoformat()
+        rows = [
+            {
+                "name": f"{run_prefix} bulk {i}",  # leads with the unique per-run prefix
+                "balance_cents": SMOKE_CARD_BALANCE_CENTS,
+                "valid_to": valid_to,
+            }
+            for i in range(count)
+        ]
+        # Drive the REAL public bulk helper so its prevalidation/pacing are covered.
+        # delay_seconds=0 disables the inter-card sleep (see create_cards_bulk docstring).
+        # create_cards_bulk is fail-fast: if card N raises, it propagates BEFORE
+        # returning the list, so the already-created (N-1) ids would be lost.
+        # We register whatever the helper returns; the Task 9 prefix-discovery sweep
+        # is the backstop for ids never returned.
+        result = create_cards_bulk(parent, rows, delay_seconds=0)
+        for card in result:
+            harness.register_created(card.id)
+
+    harness.step("bulk", _bulk)

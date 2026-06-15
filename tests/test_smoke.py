@@ -437,3 +437,39 @@ def test_run_lifecycle_reveal_rejects_invalid_card_data(monkeypatch):
     with pytest.raises(smoke.SmokeError):
         smoke.run_lifecycle(h, parent_id=None, today=_date(2026, 6, 14), run_prefix="extendvcc-smoke run-test")
     assert any(r.name == "reveal" and not r.passed for r in h.results)
+
+
+def test_run_bulk_calls_real_bulk_helper_and_registers_each_card(monkeypatch):
+    # run_bulk must drive the real public create_cards_bulk helper (bound at module
+    # scope on `smoke`) so its prevalidation/pacing are exercised. We patch that seam.
+    captured = {}
+
+    def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
+        captured["parent"] = parent
+        captured["rows"] = rows
+        captured["delay_seconds"] = delay_seconds
+        return [_vcard("vc_b1", rows[0]["name"]), _vcard("vc_b2", rows[1]["name"])]
+
+    monkeypatch.setattr(smoke, "create_cards_bulk", fake_bulk)
+    h = smoke.Harness(clock=_fake_clock_long())
+    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} run-test"
+    smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14), run_prefix=run_prefix)
+    assert captured["parent"] == "cc_1"
+    assert len(captured["rows"]) == 2
+    assert captured["delay_seconds"] == 0  # pacing disabled so the smoke run isn't slowed
+    assert h._created == ["vc_b1", "vc_b2"]
+    assert any(r.name == "bulk" and r.passed for r in h.results)
+
+
+def test_run_bulk_uses_smoke_prefix(monkeypatch):
+    captured = {}
+
+    def fake_bulk(parent, rows, *, delay_seconds=2.0, client=None, **kw):
+        captured["rows"] = rows
+        return [_vcard(f"vc_{i}", row["name"]) for i, row in enumerate(rows)]
+
+    monkeypatch.setattr(smoke, "create_cards_bulk", fake_bulk)
+    h = smoke.Harness(clock=_fake_clock_long())
+    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} run-test"
+    smoke.run_bulk(h, parent_id="cc_1", count=2, today=_date(2026, 6, 14), run_prefix=run_prefix)
+    assert all(row["name"].startswith(smoke.SMOKE_CARD_NAME_PREFIX) for row in captured["rows"])
