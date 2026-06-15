@@ -589,3 +589,39 @@ def test_main_bulk_partial_failure_card_is_still_closed_via_sweep(monkeypatch):
     monkeypatch.setattr(smoke, "_refuse_in_ci", lambda env=None: None)
     smoke.main(["--yes", "--bulk", "2"])
     assert ("close_card", "vc_bulk_orphan") in fake.calls
+
+
+def test_discover_smoke_leftovers_warns_loudly_when_listing_fails_after_create(monkeypatch):
+    # Last line of money-safety defence: if the discovery sweep's own list_cards()
+    # fails AFTER a create was attempted, a live card may be open. The harness must
+    # emit a LOUD warning naming $110.01 and the run prefix, and must NOT raise out
+    # (raising here would skip the cleanup() that follows it in main()'s finally).
+    h = smoke.Harness(clock=_fake_clock_long())
+    h.results.append(smoke.StepResult("create", False, 0.1, "boom"))  # a create was attempted
+
+    def boom_list(*, client=None, **kw):
+        raise RuntimeError("list_cards down")
+
+    monkeypatch.setattr(smoke, "list_cards", boom_list)
+    warnings = []
+    monkeypatch.setattr(smoke, "_warn", warnings.append)
+    run_prefix = f"{smoke.SMOKE_CARD_NAME_PREFIX} 20260614T213512Z-1a2b3c4d"
+    smoke.discover_smoke_leftovers(h, run_prefix=run_prefix)  # must not raise
+    assert warnings and "110.01" in warnings[0]
+    assert run_prefix in warnings[0]
+
+
+def test_discover_smoke_leftovers_warning_is_harmless_when_no_create(monkeypatch):
+    # If discovery fails but NO create was attempted, nothing was created, so the
+    # warning is the quiet/harmless variant (no $110.01 money alarm).
+    h = smoke.Harness(clock=_fake_clock_long())  # no create step recorded
+
+    def boom_list(*, client=None, **kw):
+        raise RuntimeError("list_cards down")
+
+    monkeypatch.setattr(smoke, "list_cards", boom_list)
+    warnings = []
+    monkeypatch.setattr(smoke, "_warn", warnings.append)
+    smoke.discover_smoke_leftovers(h, run_prefix="extendvcc-smoke x")  # must not raise
+    assert warnings and "harmless" in warnings[0]
+    assert "110.01" not in warnings[0]
