@@ -19,10 +19,14 @@ from typing import Callable
 from extendvcc import _exit_codes
 from extendvcc.auth import PayWithExtendAuthError
 from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
-from extendvcc.models import CardStatus
+from extendvcc.models import CardStatus, CreditCard
 
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
+
+
+class SmokeError(Exception):
+    """A smoke-test precondition or assertion failed."""
 
 
 def luhn_valid(number: str) -> bool:
@@ -60,6 +64,18 @@ def expiry_in_future(expires: str, today: date) -> bool:
 def mask_last4(number: str) -> str:
     digits = "".join(c for c in number if c.isdigit())
     return f"****{digits[-4:]}" if len(digits) >= 4 else "****"
+
+
+def select_parent(credit_cards: list[CreditCard], *, requested: str | None) -> str:
+    by_id = {c.id: c for c in credit_cards}
+    if requested is not None:
+        if requested not in by_id:
+            raise SmokeError(f"requested parent card {requested!r} not found in account")
+        return requested
+    for c in credit_cards:
+        if c.status == CardStatus.ACTIVE:
+            return c.id
+    raise SmokeError("no ACTIVE parent credit card available to create the smoke card")
 
 
 @dataclass

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from extendvcc import _exit_codes
 from extendvcc.auth import SessionNotFound
 from extendvcc.client import PayWithExtendDisabled, PayWithExtendError
-from extendvcc.models import CardStatus
+from extendvcc.models import CardStatus, CreditCard
 
 _SMOKE_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "smoke_test.py"
 
@@ -267,3 +267,34 @@ def test_confirm_reads_yes_no():
     assert smoke.confirm(assume_yes=False, reader=lambda: "y") is True
     assert smoke.confirm(assume_yes=False, reader=lambda: "no") is False
     assert smoke.confirm(assume_yes=False, reader=lambda: "") is False
+
+
+def _cc(cid, status):
+    # CreditCard is frozen+slots with required fields: id, last4, status, display_name
+    return CreditCard(id=cid, last4="1111", status=status, display_name=f"card-{cid}")
+
+
+def test_select_parent_prefers_explicit_when_present():
+    cards = [_cc("cc_1", CardStatus.ACTIVE), _cc("cc_2", CardStatus.ACTIVE)]
+    assert smoke.select_parent(cards, requested="cc_2") == "cc_2"
+
+
+def test_select_parent_falls_back_to_first_active():
+    cards = [_cc("cc_x", CardStatus.CANCELLED), _cc("cc_y", CardStatus.ACTIVE)]
+    assert smoke.select_parent(cards, requested=None) == "cc_y"
+
+
+def test_select_parent_raises_when_requested_missing():
+    import pytest
+
+    cards = [_cc("cc_y", CardStatus.ACTIVE)]
+    with pytest.raises(smoke.SmokeError):
+        smoke.select_parent(cards, requested="cc_absent")
+
+
+def test_select_parent_raises_when_no_active_card():
+    import pytest
+
+    cards = [_cc("cc_x", CardStatus.CANCELLED)]
+    with pytest.raises(smoke.SmokeError):
+        smoke.select_parent(cards, requested=None)
