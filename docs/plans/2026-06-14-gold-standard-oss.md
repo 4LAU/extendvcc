@@ -90,6 +90,12 @@ Create an empty `src/extendvcc/py.typed` file (PEP 561). Without this, the `Typi
 
 Add badges (CI status, license, Python versions). Fix the `reveal` example: change `extendvcc reveal <card-id> --json creds.json` to `extendvcc reveal <card-id> --json-path creds.json` (the CLI parser uses `--json-path PATH` for file output, not `--json` which is a global boolean flag). Add examples distinguishing masked stdout and `--json-path` secure file write. **Do not document `reveal --json` (raw PAN/CVC to stdout) as a normal usage pattern** — it conflicts with the security posture this plan establishes. The README should present `--json-path` as the primary credential-retrieval path, note that `reveal` without flags shows masked output, and mention that `--json` exists for scripting but outputs full PAN/CVC to stdout (with a warning).
 
+### 7a. Add `activate` CLI subcommand
+
+The `enroll` command output (cli.py:125) tells users to run `extendvcc activate <id>`, and `cards.py` exports `activate_credit_card()`, but the CLI parser has no `activate` subcommand and `_COMMANDS` has no entry for it. This is a broken lifecycle for any user who enrolls a credit card via the CLI.
+
+Fix: add `activate` subparser (`id` positional, `--json` inherited) mapped to `activate_credit_card()`. Output: card ID, status (PENDING or ACTIVE), and a hint if still pending. Include in Group C and add test coverage in Group D.
+
 ### 8. GitHub setup
 
 - Set 8-10 topics: `python`, `cli`, `virtual-card`, `fintech`, `extend`, `card-management`, `automation`, `api-client`
@@ -102,9 +108,15 @@ Add a `publish` job to the existing `release.yml` (not a separate file — trust
 - Runs in a `release` GitHub environment (must match PyPI trusted publisher config)
 - Has `permissions: { id-token: write, contents: read }` at the job level (job-level `permissions` override unspecified scopes to `none`, so `contents: read` is needed for checkout; the workflow-level `contents: write` stays for the release job)
 - Installs the `build` frontend explicitly (`pip install build` — it is not in project dependencies), then builds the sdist/wheel with `python -m build` and publishes with `pypa/gh-action-pypi-publish`
-- Adds a test step (or reusable test workflow call) before publish, since CI only runs on push-to-main and PRs — tag pushes currently skip tests
+- Adds a `test` job (or reusable test workflow call) that runs before any publishing. **This test job must gate both the `release` (binary) and `publish` (PyPI) jobs** — the current `release` job depends only on `build`, so a tag with failing tests would still publish binaries even if PyPI is gated. Add `needs: [build, test]` to both `release` and `publish`.
 
-Single tag push builds binaries AND publishes to PyPI.
+Single tag push runs tests, then builds binaries AND publishes to PyPI. No artifacts ship if tests fail.
+
+### 9a. Fix login credential pass-through
+
+`_cmd_login()` in `cli.py` writes the interactive password into `os.environ["EXTENDVCC_PASSWORD"]` (line 55-56) solely because `auth.setup()` does not accept credentials — even though `auth.authenticate()` already does. This makes the plaintext password available for the process lifetime and inheritable by any child process. For a tool whose OSS credibility rests on security hygiene, this must be fixed before shipping SECURITY.md.
+
+Fix: add `email` and `password` parameters to `auth.setup()`, forwarding them to `authenticate(email=email, password=password, ...)`. Update `_cmd_login()` to pass credentials directly and remove the `os.environ` writes. This belongs in Group C (code polish).
 
 ### 10. Stable exit codes
 
@@ -136,7 +148,8 @@ Add `--dry-run` flag to: `create`, `bulk`, `cancel`, `close`, `update`.
 **Prerequisite: extract pure payload builders in `cards.py`.** The request body for `create_card()` is currently assembled inline (UUID correlation suffix, `account_context()` recipient resolution, recurrence payload) immediately before dispatch. `update_card()` builds its PUT body after a read-modify-write GET. If dry-run logic lives in `cli.py`, it will duplicate this shaping and inevitably diverge. Extract `build_create_card_payload(...)`, `build_update_card_payload(raw, overrides)`, etc. as pure functions. Both dry-run and real mutations call the same builders.
 
 Behavior varies by command:
-- **create / bulk / cancel / close:** call the shared builder to produce the full request body without dispatch. Print the operation plan (card name, amount, target card ID) to stderr, print the would-be request body to stdout as JSON, exit 0. No API call made.
+- **create / bulk:** call the shared builder to produce the full request body without dispatch. Print the operation plan (card name, amount, target card ID) to stderr, print the would-be request body to stdout as JSON, exit 0. No API call made.
+- **cancel / close:** these are bodyless PUTs (`PUT /virtualcards/{id}/cancel` and `/close`) — there is no request body to build. Dry-run should emit an operation descriptor to stdout as JSON: `{"method": "PUT", "path": "/virtualcards/{id}/cancel", "card_id": "...", "reversible": true|false, "body": null}`. Print a human summary to stderr. No payload builder needed.
 - **update:** the builder performs the read-only GET to show the accurate merged payload (GET is non-destructive). Print the current state and the would-be PUT body to stdout as JSON. If the GET is not acceptable, fall back to showing only the override fields as a "semantic patch" and document that the full body requires the GET. Either way, no mutation is made.
 
 `create_card()` derives `recipient` via `account_context()` (which loads the session). Dry-run create should use a placeholder like `"<session-email>"` if no session exists, rather than failing with an auth error. Label the output as an approximate semantic preview, not "full request body," when no active session exists.
@@ -162,16 +175,16 @@ Implementation: introduce a `_info(msg)` helper that prints to stderr, replace b
 ## Task grouping
 
 **Group A — Documentation (no code changes):**
-Tasks 1-8 (CLAUDE.md scrub, AGENTS.md, pyproject.toml, CHANGELOG, SECURITY.md, .gitignore, py.typed, README badges + reveal fix, GitHub setup)
+Tasks 1-8 (CLAUDE.md scrub, AGENTS.md, pyproject.toml, CHANGELOG, SECURITY.md, .gitignore, py.typed, README badges + reveal fix + activate subcommand (7a), GitHub setup)
 
 **Group B — CI/CD:**
-Task 9 (PyPI publish job in release.yml)
+Task 9 (PyPI publish job + test gating for all release artifacts in release.yml)
 
 **Group C — Code polish:**
-Tasks 10-12 (exit codes with full exception mapping, --dry-run with update GET semantics, stdout/stderr)
+Tasks 9a, 10-12 (login credential pass-through fix, exit codes with full exception mapping, --dry-run with correct cancel/close semantics, stdout/stderr, activate subcommand)
 
 **Group D — CLI tests:**
-New `tests/test_cli.py` covering exit codes, --json isolation, --dry-run output, argparse errors. Depends on Group C.
+New `tests/test_cli.py` covering exit codes, --json isolation, --dry-run output, activate lifecycle, argparse errors. Depends on Group C.
 
 Groups A and B are independent and can run in parallel. Group C depends on nothing but should be reviewed as a unit. Group D depends on Group C.
 
@@ -185,7 +198,7 @@ Groups A and B are independent and can run in parallel. Group C depends on nothi
    - Confirm no API credentials, IMAP passwords, session tokens, or card data were ever committed. If found, rotate immediately and consider `git filter-repo` to remove from history before going public.
    - Review `git log --diff-filter=D --name-only` for deleted files that contained credentials.
 4. **Manual tasks for L:**
-   - Configure PyPI trusted publisher: go to pypi.org/manage/project/extendvcc/settings/publishing/, add GitHub publisher (owner: 4LAU, repo: extendvcc, workflow: release.yml, environment: release)
+   - Configure PyPI trusted publisher: since `extendvcc` does not yet exist on PyPI, use the **pending publisher** flow at pypi.org/manage/account/publishing/ (account-level, not project-level). Add a pending publisher (owner: 4LAU, repo: extendvcc, workflow: release.yml, environment: release). The pending publisher does not reserve the package name — verify `extendvcc` is unclaimed on PyPI immediately before tagging v0.1.0. After first successful publish, the trusted publisher moves to project settings automatically.
    - Flip repo visibility: `gh repo edit 4LAU/extendvcc --visibility public`
    - Verify first public CI run passes
    - Tag v0.1.0 to trigger first PyPI publish + binary release
