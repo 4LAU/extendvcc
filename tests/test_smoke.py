@@ -332,7 +332,7 @@ class _FakeCards:
 
     def account_context(self):
         self.calls.append(("account_context",))
-        return {"email": "user@example.com", "org": "org_123"}
+        return {"email": "user@example.com", "org_id": "org_123"}
 
     def list_issuers(self, *, client=None):
         self.calls.append(("list_issuers",))
