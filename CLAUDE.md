@@ -1,6 +1,6 @@
 # extendvcc
 
-Unofficial Python client and CLI for Extend's private virtual card API. Extracted from `argus/lib/paywithextend/`.
+Unofficial Python client and CLI for Extend's private virtual card API.
 
 **Stack:** Python 3.11+, src/ layout, hatchling build, impit (Chrome TLS fingerprinting), filelock, argparse CLI, pytest, ruff.
 
@@ -8,7 +8,7 @@ Unofficial Python client and CLI for Extend's private virtual card API. Extracte
 
 ## Critical Rules
 
-1. **NEVER expose secrets** — card numbers, CVCs, API tokens, session files, PII. If exposed: STOP, inform L, rotate.
+1. **NEVER expose secrets** — card numbers, CVCs, API tokens, session files, PII. If exposed: STOP and rotate immediately.
 2. **NEVER use `git add .`** — add files individually. gitleaks pre-commit enforces this.
 3. **NEVER log or print card numbers, CVCs, or full tokens.** Mask to last 4 digits when logging is necessary.
 4. **NEVER make real Extend API calls in tests.** All tests run offline with fakes.
@@ -31,7 +31,7 @@ All three clean before claiming done.
 
 ## Code Practices
 
-**Ask L approval for:** auth flow changes, anything touching card number/CVC handling, public API surface changes, destructive ops. Everything else: proceed.
+**Ask maintainer approval for:** auth flow changes, anything touching card number/CVC handling, public API surface changes, destructive ops. Everything else: proceed.
 
 **Generation:** Search existing code first. One function at a time (max 30 lines).
 
@@ -65,8 +65,3 @@ src/extendvcc/
 
 See `docs/testing-policy.md`. All tests offline, mock only at I/O boundary, every test protects a named invariant.
 
----
-
-## Communication
-
-Refer to user as **L**. Brief summary first. No praise. Frame what/why, not how.
