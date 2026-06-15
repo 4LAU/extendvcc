@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "extendvcc"
+name = "extendvcc-cli"
 version = "0.1.0"
 description = "Unofficial CLI and Python client for the Extend virtual card API"
 readme = "README.md"
@@ -40,6 +40,11 @@ Homepage = "https://github.com/4LAU/extendvcc"
 Repository = "https://github.com/4LAU/extendvcc"
 Issues = "https://github.com/4LAU/extendvcc/issues"
 Changelog = "https://github.com/4LAU/extendvcc/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+# The PyPI distribution is "extendvcc-cli" but the import package is "extendvcc";
+# tell hatchling explicitly since the names no longer match.
+packages = ["src/extendvcc"]
 
 [tool.ruff]
 target-version = "py311"

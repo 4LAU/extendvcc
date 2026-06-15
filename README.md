@@ -1,8 +1,9 @@
 # extendvcc
 
 [![CI](https://github.com/4LAU/extendvcc/actions/workflows/ci.yml/badge.svg)](https://github.com/4LAU/extendvcc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/extendvcc-cli.svg)](https://pypi.org/project/extendvcc-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://pypi.org/project/extendvcc/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://pypi.org/project/extendvcc-cli/)
 
 Unofficial CLI and Python client for the Extend virtual card API.
 
@@ -16,9 +17,9 @@ Unofficial CLI and Python client for the Extend virtual card API.
 ## Install
 
 ```bash
-pip install extendvcc
+pip install extendvcc-cli
 # or
-pipx install extendvcc
+pipx install extendvcc-cli
 ```
 
 Standalone binary (no Python required): download from [GitHub Releases](../../releases).
