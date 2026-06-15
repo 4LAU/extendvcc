@@ -43,6 +43,7 @@ def _card_to_dict(card: Any) -> dict[str, Any]:
 # Command handlers
 # ---------------------------------------------------------------------------
 
+
 def _cmd_login(args: argparse.Namespace) -> int:
     from . import auth
     from .imap_otp import make_otp_callback
@@ -460,6 +461,7 @@ def _cmd_clear_disabled(args: argparse.Namespace) -> int:
 # Parser construction
 # ---------------------------------------------------------------------------
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="extendvcc",
@@ -537,8 +539,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # reveal
     p = sub.add_parser("reveal", help="Reveal live card credentials (PAN, CVC, expiry)")
     p.add_argument("id", help="Virtual card ID")
-    p.add_argument("--json-path", default=None, metavar="PATH",
-                   help="Save full credentials to file (0600 perms) instead of printing masked")
+    p.add_argument(
+        "--json-path",
+        default=None,
+        metavar="PATH",
+        help="Save full credentials to file (0600 perms) instead of printing masked",
+    )
 
     # update
     p = sub.add_parser("update", help="Update a virtual card (read-modify-write)")

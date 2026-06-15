@@ -411,8 +411,7 @@ def _auth_result_to_session(
             "access_token": access_token,
             "id_token": id_token,
             "refresh_token": auth_result.get("RefreshToken") or session.get("refresh_token"),
-            "expires_at": _jwt_exp(access_token)
-            or (time.time() + float(auth_result.get("ExpiresIn", 3600))),
+            "expires_at": _jwt_exp(access_token) or (time.time() + float(auth_result.get("ExpiresIn", 3600))),
             "email": email,
             "user_pool_id": user_pool_id,
             "client_id": client_id,
@@ -851,9 +850,7 @@ def _redact_email(email: str | None) -> str | None:
 
 def _setup_report(session: Mapping[str, Any], user: Mapping[str, Any], headers: Mapping[str, str]) -> dict[str, Any]:
     rate_limit_headers = {
-        key: value
-        for key, value in headers.items()
-        if key.startswith("x-rate") or key.startswith("ratelimit")
+        key: value for key, value in headers.items() if key.startswith("x-rate") or key.startswith("ratelimit")
     }
     return {
         "success": True,

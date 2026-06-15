@@ -4,8 +4,6 @@ import email.mime.multipart
 import email.mime.text
 import time
 
-import pytest
-
 from extendvcc import imap_otp
 
 EXTEND_HTML_BODY = """
@@ -65,10 +63,7 @@ class TestExtractCode:
         assert imap_otp.extract_code("code:&nbsp;192837") == "192837"
 
     def test_enter_this_verification_code_pattern(self):
-        text = (
-            "Enter this verification code into your app or browser, "
-            "and you'll be all set: 482019"
-        )
+        text = "Enter this verification code into your app or browser, and you'll be all set: 482019"
         assert imap_otp.extract_code(text) == "482019"
 
 
@@ -115,7 +110,8 @@ class TestMakeOtpCallback:
 
     def test_returns_imap_callback_when_credentials_exist(self, monkeypatch):
         monkeypatch.setattr(
-            imap_otp, "read_imap_credentials",
+            imap_otp,
+            "read_imap_credentials",
             lambda: ("user@gmail.com", "pass", "imap.gmail.com"),
         )
         callback = imap_otp.make_otp_callback()

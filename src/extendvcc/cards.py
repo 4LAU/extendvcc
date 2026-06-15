@@ -18,8 +18,16 @@ logger = logging.getLogger(__name__)
 
 # Fields that may be included in a PUT /virtualcards/{id} body (allowlist).
 UPDATE_PAYLOAD_FIELDS = (
-    "creditCardId", "displayName", "expenseDetails", "balanceCents", "recurs",
-    "receiptAttachmentIds", "validTo", "currency", "receiptRulesExempt", "lowLimitAlert",
+    "creditCardId",
+    "displayName",
+    "expenseDetails",
+    "balanceCents",
+    "recurs",
+    "receiptAttachmentIds",
+    "validTo",
+    "currency",
+    "receiptRulesExempt",
+    "lowLimitAlert",
 )
 
 _PAGE_SIZE = 100
@@ -28,6 +36,7 @@ _PAGE_SIZE = 100
 # ---------------------------------------------------------------------------
 # Private parse helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_date(value: Any) -> date | None:
     if not value:
@@ -179,6 +188,7 @@ def account_context() -> dict[str, Any]:
 # Read functions
 # ---------------------------------------------------------------------------
 
+
 def list_credit_cards(*, client: Any = None) -> list[CreditCard]:
     """Return all credit cards on the account. GET /creditcards."""
     c = client or _default_client()
@@ -202,10 +212,7 @@ def list_issuers(*, client: Any = None) -> list[Issuer]:
     c = client or _default_client()
     data = c.get("/issuers")
     try:
-        return [
-            Issuer(id=issuer["id"], name=issuer["name"], code=issuer["code"])
-            for issuer in data.get("issuers", [])
-        ]
+        return [Issuer(id=issuer["id"], name=issuer["name"], code=issuer["code"]) for issuer in data.get("issuers", [])]
     except (KeyError, TypeError) as exc:
         raise PayWithExtendError(f"unexpected issuer shape: missing field {exc}") from exc
 
@@ -619,8 +626,8 @@ def enroll_credit_card(
         "organizationId": org_id,
     }
 
-    vault_c = client or vault_client()       # step 1 (POST) lives on the vault host
-    api_c = client or _default_client()      # step 2 (PUT .../virtual) lives on the api host
+    vault_c = client or vault_client()  # step 1 (POST) lives on the vault host
+    api_c = client or _default_client()  # step 2 (PUT .../virtual) lives on the api host
     key = f"enroll:{display_name} [{uuid.uuid4().hex[:8]}]"
 
     def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
@@ -636,9 +643,7 @@ def enroll_credit_card(
     # card stuck Inactive with no email ever sent. Once the cardholder verifies,
     # call activate_credit_card() to pull PENDING -> ACTIVE.
     resp = api_c.put(f"/creditcardsv2/{enrolled.id}/virtual", json_body={})
-    return _parse_credit_card(
-        resp, "enable-virtual response", fallback=enrolled, fallback_status=CardStatus.PENDING
-    )
+    return _parse_credit_card(resp, "enable-virtual response", fallback=enrolled, fallback_status=CardStatus.PENDING)
 
 
 def activate_credit_card(credit_card_id: str, *, client: Any = None) -> CreditCard:

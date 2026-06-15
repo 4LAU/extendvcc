@@ -11,10 +11,10 @@ import asyncio
 import dataclasses
 import inspect
 import json
+import logging
 import os
 import re
 import tempfile
-import logging
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _ledger_path() -> Path:
     from extendvcc._paths import ledger_path
+
     return ledger_path()
 
 
@@ -296,11 +297,7 @@ def sync(fetcher: Callable[[], Any] | None = None) -> dict[str, Any]:
                 continue
 
             current = records[card_index]
-            changed_fields = {
-                key: value
-                for key, value in card.items()
-                if current.get(key) != value
-            }
+            changed_fields = {key: value for key, value in card.items() if current.get(key) != value}
             if changed_fields:
                 records[card_index] = {**current, **changed_fields}
                 updated[card_id] = changed_fields
@@ -423,10 +420,7 @@ def _normalize_card_record(card_record: Mapping[str, Any] | Any) -> dict[str, An
     record["card_id"] = str(card_id)
 
     # Coerce date/datetime values to ISO strings so json.dumps does not crash.
-    record = {
-        key: value.isoformat() if isinstance(value, (date, datetime)) else value
-        for key, value in record.items()
-    }
+    record = {key: value.isoformat() if isinstance(value, (date, datetime)) else value for key, value in record.items()}
 
     _assert_no_sensitive_data(record)
     return record
@@ -476,11 +470,12 @@ def _assert_no_sensitive_data(value: Any, path: str = "record") -> None:
             key_text = str(key)
             normalized_key = _snake_key(key_text).lower()
             compact_key = normalized_key.replace("_", "")
-            if normalized_key in _SENSITIVE_FIELD_NAMES or any(
-                fragment in f"_{normalized_key}_" for fragment in _SENSITIVE_KEY_FRAGMENTS
-            ) or any(
-                fragment in compact_key for fragment in _SENSITIVE_COMPACT_KEY_FRAGMENTS
-            ) or _looks_like_credential_key(compact_key):
+            if (
+                normalized_key in _SENSITIVE_FIELD_NAMES
+                or any(fragment in f"_{normalized_key}_" for fragment in _SENSITIVE_KEY_FRAGMENTS)
+                or any(fragment in compact_key for fragment in _SENSITIVE_COMPACT_KEY_FRAGMENTS)
+                or _looks_like_credential_key(compact_key)
+            ):
                 raise ValueError(f"refusing to store sensitive card field: {path}.{key_text}")
             _assert_no_sensitive_data(item, f"{path}.{key_text}")
         return

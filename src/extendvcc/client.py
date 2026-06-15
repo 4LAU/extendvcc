@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse, urlencode
+from urllib.parse import urlencode, urlparse
 
 import impit
 
@@ -66,6 +66,8 @@ def _scrub_payload(value: Any) -> Any:
     if isinstance(value, str):
         return _PAN_RUN_RE.sub("[redacted]", value)
     return value
+
+
 _HTML_MARKERS = (
     "<!doctype html",
     "<html",
@@ -92,6 +94,7 @@ _VERIFICATION_MARKERS = (
 
 def _disabled_state_path() -> Path:
     from extendvcc._paths import state_dir
+
     return state_dir() / "paywithextend_disabled.json"
 
 
@@ -451,9 +454,7 @@ class PayWithExtendClient:
                 remaining = None
 
         status_code = int(getattr(response, "status_code", 0))
-        should_backoff = status_code == 429 or (
-            remaining is not None and remaining <= self._rate_limit_low_watermark
-        )
+        should_backoff = status_code == 429 or (remaining is not None and remaining <= self._rate_limit_low_watermark)
         if not should_backoff:
             self._rate_limit_hits = 0
             return

@@ -10,7 +10,6 @@ from extendvcc import auth, cards, ledger
 from extendvcc._paths import configure as configure_paths
 from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled
 
-
 _BASE_SESSION = {
     "email": "user@example.com",
     "access_token": "old_token",
@@ -34,6 +33,7 @@ def _patch_ledger(monkeypatch, tmp_path):
 # 1. org_id already in session — fetch_current_user must NOT be called
 # ---------------------------------------------------------------------------
 
+
 def test_account_context_org_present(monkeypatch):
     monkeypatch.setattr(cards.auth, "load_session", lambda: dict(_BASE_SESSION))
     monkeypatch.setattr(cards.auth, "refresh_tokens", lambda session: dict(_REFRESHED_SESSION))
@@ -51,6 +51,7 @@ def test_account_context_org_present(monkeypatch):
 # ---------------------------------------------------------------------------
 # 2. org_id absent → /users/me is called; save_session persists the org_id
 # ---------------------------------------------------------------------------
+
 
 def test_account_context_org_absent_fetches_users_me(monkeypatch):
     session_without_org = {k: v for k, v in _BASE_SESSION.items() if k != "org_id"}
@@ -80,6 +81,7 @@ def test_account_context_org_absent_fetches_users_me(monkeypatch):
 # 3. Password-free guarantee — read_credentials / ensure_valid_token /
 #    authenticate must never be invoked on either branch
 # ---------------------------------------------------------------------------
+
 
 def _bang(*args, **kwargs):
     raise AssertionError("must not be called")
@@ -120,6 +122,7 @@ def test_no_password_read_org_absent(monkeypatch):
 # 4. No session (or no email) → SessionNotFound "setup required"
 # ---------------------------------------------------------------------------
 
+
 def test_no_session_raises_session_not_found(monkeypatch):
     monkeypatch.setattr(cards.auth, "load_session", lambda: None)
 
@@ -137,6 +140,7 @@ def test_session_missing_email_raises_session_not_found(monkeypatch):
 # ---------------------------------------------------------------------------
 # Fake client helper
 # ---------------------------------------------------------------------------
+
 
 class _FakeClient:
     """Minimal fake client that records calls and returns canned responses."""
@@ -158,15 +162,18 @@ class _FakeClient:
 # list_credit_cards
 # ---------------------------------------------------------------------------
 
+
 def test_list_credit_cards_parses_response():
-    fake = _FakeClient({
-        "/creditcards": {
-            "creditCards": [
-                {"id": "cc_test1", "last4": "1234", "status": "ACTIVE", "displayName": "Test Card A"},
-                {"id": "cc_test2", "last4": "5678", "status": "CANCELLED", "displayName": "Test Card B"},
-            ]
+    fake = _FakeClient(
+        {
+            "/creditcards": {
+                "creditCards": [
+                    {"id": "cc_test1", "last4": "1234", "status": "ACTIVE", "displayName": "Test Card A"},
+                    {"id": "cc_test2", "last4": "5678", "status": "CANCELLED", "displayName": "Test Card B"},
+                ]
+            }
         }
-    })
+    )
     result = cards.list_credit_cards(client=fake)
 
     assert len(result) == 2
@@ -182,14 +189,17 @@ def test_list_credit_cards_parses_response():
 # list_issuers
 # ---------------------------------------------------------------------------
 
+
 def test_list_issuers_parses_response():
-    fake = _FakeClient({
-        "/issuers": {
-            "issuers": [
-                {"id": "ii_test1", "name": "Test Bank", "code": "TESTBANK"},
-            ]
+    fake = _FakeClient(
+        {
+            "/issuers": {
+                "issuers": [
+                    {"id": "ii_test1", "name": "Test Bank", "code": "TESTBANK"},
+                ]
+            }
         }
-    })
+    )
     result = cards.list_issuers(client=fake)
 
     assert len(result) == 1
@@ -216,12 +226,14 @@ _VC_TEMPLATE = {
 
 
 def test_list_cards_single_page():
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 1, "totalItems": 1},
-            "virtualCards": [_VC_TEMPLATE],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 1, "totalItems": 1},
+                "virtualCards": [_VC_TEMPLATE],
+            }
         }
-    })
+    )
     result = cards.list_cards(client=fake)
 
     assert len(result) == 1
@@ -262,12 +274,14 @@ def test_list_cards_paginates():
 
 
 def test_list_cards_passes_credit_card_id_filter():
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
-            "virtualCards": [],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
+                "virtualCards": [],
+            }
         }
-    })
+    )
     cards.list_cards(credit_card_id="cc_test1", client=fake)
 
     _, params = fake.calls[0]
@@ -275,12 +289,14 @@ def test_list_cards_passes_credit_card_id_filter():
 
 
 def test_list_cards_passes_status_enum_filter():
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
-            "virtualCards": [],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
+                "virtualCards": [],
+            }
         }
-    })
+    )
     cards.list_cards(status=cards.CardStatus.ACTIVE, client=fake)
 
     _, params = fake.calls[0]
@@ -288,12 +304,14 @@ def test_list_cards_passes_status_enum_filter():
 
 
 def test_list_cards_passes_status_string_filter():
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
-            "virtualCards": [],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
+                "virtualCards": [],
+            }
         }
-    })
+    )
     cards.list_cards(status="CLOSED", client=fake)
 
     _, params = fake.calls[0]
@@ -302,12 +320,14 @@ def test_list_cards_passes_status_string_filter():
 
 def test_list_cards_callable_no_args(monkeypatch):
     """list_cards() with no args must not raise (default client path)."""
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
-            "virtualCards": [],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 0, "totalItems": 0},
+                "virtualCards": [],
+            }
         }
-    })
+    )
     monkeypatch.setattr(cards, "_default_client", lambda: fake)
     result = cards.list_cards()
     assert result == []
@@ -317,14 +337,17 @@ def test_list_cards_callable_no_args(monkeypatch):
 # get_card
 # ---------------------------------------------------------------------------
 
-def test_get_card_parses_virtual_card():
-    from datetime import date, datetime, timezone
 
-    fake = _FakeClient({
-        "/virtualcards/vc_test1": {
-            "virtualCard": _VC_TEMPLATE,
+def test_get_card_parses_virtual_card():
+    from datetime import date
+
+    fake = _FakeClient(
+        {
+            "/virtualcards/vc_test1": {
+                "virtualCard": _VC_TEMPLATE,
+            }
         }
-    })
+    )
     result = cards.get_card("vc_test1", client=fake)
 
     assert result.id == "vc_test1"
@@ -457,6 +480,7 @@ _CARD_RESP = {"virtualCard": _SYNTH_CARD}
 # ---------------------------------------------------------------------------
 # create_card
 # ---------------------------------------------------------------------------
+
 
 def test_create_card_body_shape(monkeypatch, tmp_path):
     _patch_ledger(monkeypatch, tmp_path)
@@ -674,6 +698,7 @@ def test_update_card_correlation_key(monkeypatch, tmp_path):
 # cancel_card / close_card
 # ---------------------------------------------------------------------------
 
+
 def test_cancel_card(monkeypatch, tmp_path):
     _patch_ledger(monkeypatch, tmp_path)
     put_resp = {"virtualCard": {**_SYNTH_CARD, "id": "vc_cancel1", "status": "CANCELLED"}}
@@ -717,14 +742,13 @@ def test_close_card(monkeypatch, tmp_path):
 # Failure handling
 # ---------------------------------------------------------------------------
 
+
 def test_4xx_error_resolves_pending_failed(monkeypatch, tmp_path):
     """A 4xx API error must resolve the pending row as failed and re-raise."""
     _patch_ledger(monkeypatch, tmp_path)
     monkeypatch.setattr(cards, "account_context", lambda: {"email": "u@e.com", "org_id": "o"})
 
-    err = PayWithExtendAPIError(
-        "Bad request", status_code=422, path="/virtualcards"
-    )
+    err = PayWithExtendAPIError("Bad request", status_code=422, path="/virtualcards")
 
     class _ErrorClient:
         def post(self, path, *, json_body=None, **_kw):
@@ -794,6 +818,7 @@ def test_5xx_error_leaves_pending_row(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # reconcile / create recovery
 # ---------------------------------------------------------------------------
+
 
 def test_reconcile_adopts_remote_card(monkeypatch, tmp_path):
     """Stale pending create row matched by name on remote → confirmed, no duplicate POST."""
@@ -938,6 +963,7 @@ def test_reveal_card_no_expires():
 # ledger.sync(fetcher=cards.list_cards) date/datetime serialization (Fix B)
 # ---------------------------------------------------------------------------
 
+
 def test_ledger_sync_with_list_cards_serializes_dates(monkeypatch, tmp_path):
     """ledger.sync(fetcher=cards.list_cards) must not crash on date/datetime fields.
 
@@ -948,12 +974,14 @@ def test_ledger_sync_with_list_cards_serializes_dates(monkeypatch, tmp_path):
 
     _patch_ledger(monkeypatch, tmp_path)
 
-    fake = _FakeClient({
-        "/virtualcards": {
-            "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 1, "totalItems": 1},
-            "virtualCards": [_VC_TEMPLATE],
+    fake = _FakeClient(
+        {
+            "/virtualcards": {
+                "pagination": {"numberOfPages": 1, "page": 0, "pageItemCount": 1, "totalItems": 1},
+                "virtualCards": [_VC_TEMPLATE],
+            }
         }
-    })
+    )
 
     # Must not raise TypeError from json.dumps on date/datetime objects.
     summary = ledger.sync(fetcher=lambda: cards.list_cards(client=fake))
@@ -976,7 +1004,7 @@ def test_ledger_sync_with_list_cards_serializes_dates(monkeypatch, tmp_path):
 # enroll_credit_card
 # ---------------------------------------------------------------------------
 
-_ENROLL_PAN = "0000111122223333"   # synthetic, non-Luhn
+_ENROLL_PAN = "0000111122223333"  # synthetic, non-Luhn
 _ENROLL_CVC = "123"
 _ENROLL_ADDR = {
     "address1": "123 Main St",
@@ -1051,9 +1079,19 @@ def test_enroll_credit_card_body_correctness(monkeypatch, tmp_path):
     assert path == "/creditcardsv2"
 
     expected_keys = {
-        "displayName", "country", "companyName", "cardholderName",
-        "address1", "address2", "city", "postal", "province",
-        "cvc", "issuerId", "issuerFields", "organizationId",
+        "displayName",
+        "country",
+        "companyName",
+        "cardholderName",
+        "address1",
+        "address2",
+        "city",
+        "postal",
+        "province",
+        "cvc",
+        "issuerId",
+        "issuerFields",
+        "organizationId",
     }
     assert set(body.keys()) == expected_keys
 
@@ -1150,8 +1188,9 @@ def test_enroll_credit_card_runs_both_steps_and_returns_pending(monkeypatch, tmp
 
 def test_activate_credit_card(monkeypatch):
     """Step 3: PATCH /creditcards/{id}/status (empty body) returns the refreshed card."""
-    patch_resp = {"creditCard": {"id": "cc_new1", "last4": "1004",
-                                 "status": "ACTIVE", "displayName": "Synthetic Parent"}}
+    patch_resp = {
+        "creditCard": {"id": "cc_new1", "last4": "1004", "status": "ACTIVE", "displayName": "Synthetic Parent"}
+    }
     fake = _MutatingFakeClient(patch_responses={"/creditcards/cc_new1/status": patch_resp})
 
     result = cards.activate_credit_card("cc_new1", client=fake)
@@ -1163,8 +1202,9 @@ def test_activate_credit_card(monkeypatch):
 
 def test_activate_credit_card_still_pending(monkeypatch):
     """If the cardholder hasn't verified yet, activate reports PENDING, not ACTIVE."""
-    patch_resp = {"creditCard": {"id": "cc_new1", "last4": "1004",
-                                 "status": "PENDING", "displayName": "Synthetic Parent"}}
+    patch_resp = {
+        "creditCard": {"id": "cc_new1", "last4": "1004", "status": "PENDING", "displayName": "Synthetic Parent"}
+    }
     fake = _MutatingFakeClient(patch_responses={"/creditcards/cc_new1/status": patch_resp})
 
     result = cards.activate_credit_card("cc_new1", client=fake)
@@ -1335,11 +1375,9 @@ def test_enroll_credit_card_5xx_leaves_pending(monkeypatch, tmp_path):
 # create_cards_bulk
 # ---------------------------------------------------------------------------
 
+
 def _bulk_rows(n: int) -> list[dict]:
-    return [
-        {"name": f"Card {i}", "balance_cents": 1000 + i, "valid_to": "2026-06-30"}
-        for i in range(n)
-    ]
+    return [{"name": f"Card {i}", "balance_cents": 1000 + i, "valid_to": "2026-06-30"} for i in range(n)]
 
 
 def test_create_cards_bulk_creates_each_row(monkeypatch, tmp_path):
@@ -1508,6 +1546,7 @@ def test_create_cards_bulk_accepts_date_object_valid_to(monkeypatch, tmp_path):
 # create_card — recurring cards
 # ---------------------------------------------------------------------------
 
+
 def _make_recurring(monkeypatch, tmp_path, recurrence):
     _patch_ledger(monkeypatch, tmp_path)
     monkeypatch.setattr(cards, "account_context", lambda: {"email": "o@e.com", "org_id": "o"})
@@ -1524,8 +1563,11 @@ def test_create_card_monthly_recurring_body(monkeypatch, tmp_path):
     assert body["recurs"] is True
     assert "validTo" not in body  # recurring cards never carry an expiry date
     assert body["recurrence"] == {
-        "balanceCents": 2000, "period": "MONTHLY", "interval": 1,
-        "terminator": "NONE", "byMonthDay": 1,
+        "balanceCents": 2000,
+        "period": "MONTHLY",
+        "interval": 1,
+        "terminator": "NONE",
+        "byMonthDay": 1,
     }
 
 
@@ -1533,7 +1575,10 @@ def test_create_card_daily_recurring_has_no_day_field(monkeypatch, tmp_path):
     rec = cards.Recurrence(period="DAILY", interval=3)
     body = _make_recurring(monkeypatch, tmp_path, rec)
     assert body["recurrence"] == {
-        "balanceCents": 2000, "period": "DAILY", "interval": 3, "terminator": "NONE",
+        "balanceCents": 2000,
+        "period": "DAILY",
+        "interval": 3,
+        "terminator": "NONE",
     }
 
 
@@ -1541,8 +1586,12 @@ def test_create_card_weekly_count_terminator(monkeypatch, tmp_path):
     rec = cards.Recurrence(period="WEEKLY", interval=2, by_week_day=3, terminator="COUNT", count=10)
     body = _make_recurring(monkeypatch, tmp_path, rec)
     assert body["recurrence"] == {
-        "balanceCents": 2000, "period": "WEEKLY", "interval": 2,
-        "terminator": "COUNT", "byWeekDay": 3, "count": 10,
+        "balanceCents": 2000,
+        "period": "WEEKLY",
+        "interval": 2,
+        "terminator": "COUNT",
+        "byWeekDay": 3,
+        "count": 10,
     }
 
 
@@ -1550,8 +1599,12 @@ def test_create_card_weekly_date_terminator(monkeypatch, tmp_path):
     rec = cards.Recurrence(period="WEEKLY", interval=1, by_week_day=3, terminator="DATE", until="2026-06-15")
     body = _make_recurring(monkeypatch, tmp_path, rec)
     assert body["recurrence"] == {
-        "balanceCents": 2000, "period": "WEEKLY", "interval": 1,
-        "terminator": "DATE", "byWeekDay": 3, "until": "2026-06-15",
+        "balanceCents": 2000,
+        "period": "WEEKLY",
+        "interval": 1,
+        "terminator": "DATE",
+        "byWeekDay": 3,
+        "until": "2026-06-15",
     }
 
 
@@ -1575,8 +1628,7 @@ def test_create_card_requires_exactly_one_of_validto_or_recurrence(monkeypatch, 
         cards.create_card("cc_x", "N", 2000, client=fake)
     # Both provided.
     with pytest.raises(ValueError, match="exactly one"):
-        cards.create_card("cc_x", "N", 2000, "2026-06-30",
-                          recurrence=cards.Recurrence(period="DAILY"), client=fake)
+        cards.create_card("cc_x", "N", 2000, "2026-06-30", recurrence=cards.Recurrence(period="DAILY"), client=fake)
     assert fake.post_calls == []
 
 

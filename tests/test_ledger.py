@@ -15,11 +15,7 @@ def _patch_ledger_path(monkeypatch, tmp_path):
 
 
 def _read_rows(path):
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 SENSITIVE_FIELD_NAMES = (
@@ -63,14 +59,16 @@ SENSITIVE_FIELD_NAMES = (
 def test_append_writes_card_record(monkeypatch, tmp_path):
     ledger_path = _patch_ledger_path(monkeypatch, tmp_path)
 
-    row = ledger.append({
-        "card_id": "vc_1",
-        "credit_card_id": "cc_1",
-        "name": "Service-Account-001",
-        "last4": "1234",
-        "status": "ACTIVE",
-        "balance_cents": 5000,
-    })
+    row = ledger.append(
+        {
+            "card_id": "vc_1",
+            "credit_card_id": "cc_1",
+            "name": "Service-Account-001",
+            "last4": "1234",
+            "status": "ACTIVE",
+            "balance_cents": 5000,
+        }
+    )
 
     assert row["record_type"] == "card"
     assert row["card_id"] == "vc_1"
@@ -87,19 +85,23 @@ def test_append_rejects_pan_and_duplicate_card_id(monkeypatch, tmp_path):
         ledger.append({"card_id": "vc_1", "name": "duplicate", "status": "ACTIVE"})
 
     with pytest.raises(ValueError, match="sensitive"):
-        ledger.append({
-            "card_id": "vc_2",
-            "name": "unsafe",
-            "pan": "4111111111111111",
-        })
+        ledger.append(
+            {
+                "card_id": "vc_2",
+                "name": "unsafe",
+                "pan": "4111111111111111",
+            }
+        )
 
     for index, field_name in enumerate(SENSITIVE_FIELD_NAMES, start=1):
         with pytest.raises(ValueError, match="sensitive"):
-            ledger.append({
-                "card_id": f"vc_sensitive_{index}",
-                "name": "unsafe",
-                field_name: "123",
-            })
+            ledger.append(
+                {
+                    "card_id": f"vc_sensitive_{index}",
+                    "name": "unsafe",
+                    field_name: "123",
+                }
+            )
 
     configure_paths()
 
@@ -163,11 +165,7 @@ def test_update_rewrites_atomically_and_preserves_other_rows(monkeypatch, tmp_pa
     assert rows[1]["card_id"] == "vc_2"
     assert rows[1]["status"] == "ACTIVE"
     assert before_inode != after_inode
-    leftovers = [
-        path
-        for path in ledger_path.parent.glob("cards.jsonl.*")
-        if path.name != "cards.jsonl.lock"
-    ]
+    leftovers = [path for path in ledger_path.parent.glob("cards.jsonl.*") if path.name != "cards.jsonl.lock"]
     assert leftovers == []
 
     configure_paths()
@@ -189,17 +187,21 @@ def test_query_filters_cards_only_by_status_and_name(monkeypatch, tmp_path):
 
 def test_sync_reconciles_with_injected_fetcher(monkeypatch, tmp_path):
     ledger_path = _patch_ledger_path(monkeypatch, tmp_path)
-    ledger.append({
-        "card_id": "vc_existing",
-        "name": "Existing",
-        "status": "ACTIVE",
-        "last4": "1111",
-    })
+    ledger.append(
+        {
+            "card_id": "vc_existing",
+            "name": "Existing",
+            "status": "ACTIVE",
+            "last4": "1111",
+        }
+    )
 
-    summary = ledger.sync(fetcher=lambda: [
-        {"id": "vc_existing", "name": "Existing", "status": "CLOSED", "last4": "1111"},
-        {"id": "vc_new", "name": "New", "status": "ACTIVE", "last4": "2222"},
-    ])
+    summary = ledger.sync(
+        fetcher=lambda: [
+            {"id": "vc_existing", "name": "Existing", "status": "CLOSED", "last4": "1111"},
+            {"id": "vc_new", "name": "New", "status": "ACTIVE", "last4": "2222"},
+        ]
+    )
 
     rows = _read_rows(ledger_path)
     by_id = {row["card_id"]: row for row in rows}
@@ -239,14 +241,16 @@ def test_sync_default_fetches_virtualcards_pages(monkeypatch, tmp_path):
             page = (params or {}).get("page", 0)
             card_id = "vc_1" if page == 0 else "vc_2"
             return {
-                "virtualCards": [{
-                    "id": card_id,
-                    "creditCardId": "cc_1",
-                    "displayName": f"Card {card_id}",
-                    "last4": "1111",
-                    "status": "ACTIVE",
-                    "balanceCents": 100,
-                }],
+                "virtualCards": [
+                    {
+                        "id": card_id,
+                        "creditCardId": "cc_1",
+                        "displayName": f"Card {card_id}",
+                        "last4": "1111",
+                        "status": "ACTIVE",
+                        "balanceCents": 100,
+                    }
+                ],
                 "pagination": {"numberOfPages": 2},
             }
 
@@ -335,9 +339,7 @@ def test_numeric_luhn_pan_values_rejected_across_write_paths(monkeypatch, tmp_pa
 
         with pytest.raises(ValueError, match="PAN"):
             ledger.sync(
-                fetcher=lambda pan_value=pan_value: [
-                    {"id": f"vc_sync_{pan_value}", "name": "Gamma", "memo": pan_value}
-                ]
+                fetcher=lambda pan_value=pan_value: [{"id": f"vc_sync_{pan_value}", "name": "Gamma", "memo": pan_value}]
             )
 
     configure_paths()

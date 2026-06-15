@@ -7,12 +7,12 @@ import pytest
 
 from extendvcc import client as client_module
 from extendvcc.client import (
+    VAULT_BASE_URL,
     AccountRiskDetected,
     PayWithExtendAPIError,
     PayWithExtendClient,
     PayWithExtendDisabled,
     PayWithExtendNonJSONError,
-    VAULT_BASE_URL,
     clear_disabled,
     vault_client,
 )
@@ -142,9 +142,7 @@ def test_429_backs_off_then_raises_api_exception() -> None:
     assert sleeps == [1.0]
 
 
-def test_403_trips_kill_switch_and_future_calls_are_refused(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_403_trips_kill_switch_and_future_calls_are_refused(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     disabled_path = tmp_path / "paywithextend_disabled.json"
     monkeypatch.setattr(client_module, "_disabled_state_path", lambda: disabled_path)
     calls = 0
