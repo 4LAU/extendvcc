@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+*.egg-info/
+.claude/
+.codex/
+.ruff_cache/
+.pytest_cache/
+*.jsonl
+*.json
+!tests/fixtures/*.json
