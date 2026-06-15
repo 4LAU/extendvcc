@@ -1110,6 +1110,63 @@ def test_create_cards_bulk_rejects_malformed_row(monkeypatch, tmp_path, bad_row,
 
 
 # ---------------------------------------------------------------------------
+# Operation builders (dry-run / real share one body-shaping implementation)
+# ---------------------------------------------------------------------------
+
+
+def test_build_create_card_operation_correlation_key_in_descriptor():
+    """The correlation key (UUID-suffixed displayName) must be returned in the
+    descriptor, not regenerated, so a dry-run preview matches the real request."""
+    op = cards.build_create_card_operation(
+        "cc_x",
+        "My Card",
+        5000,
+        "2026-06-30",
+        recipient_resolver=lambda: "r@e.com",
+        token_factory=lambda: "fixed123",
+    )
+    assert op["correlation_key"] == "My Card [fixed123]"
+    # The body's displayName must equal the returned correlation key exactly.
+    assert op["body"]["displayName"] == op["correlation_key"]
+    assert op["body"]["recipient"] == "r@e.com"
+    assert op["body"]["validTo"] == "2026-06-30"
+    assert op["method"] == "POST"
+    assert op["path"] == "/virtualcards"
+
+
+def test_build_create_card_operation_rejects_both_or_neither():
+    """Exactly one of valid_to / recurrence — the builder enforces it like create_card."""
+    with pytest.raises(ValueError, match="exactly one"):
+        cards.build_create_card_operation(
+            "cc_x",
+            "C",
+            1000,
+            "2026-06-30",
+            recurrence=cards.Recurrence(period="MONTHLY", interval=1, by_month_day=1),
+            recipient_resolver=lambda: "r@e.com",
+            token_factory=lambda: "t",
+        )
+
+
+def test_build_update_card_operation_allowlist_projection():
+    """The update builder projects the fetched card to the allowlist and applies
+    overrides — same body the real PUT would send, without any network here."""
+    raw = {**_RAW_CARD_WITH_EXTRA, "id": "vc_b"}
+    op = cards.build_update_card_operation(
+        "vc_b",
+        {"balanceCents": 7777},
+        fetcher=lambda: {"virtualCard": raw},
+    )
+    body = op["body"]
+    assert "someServerField" not in body  # non-allowlist dropped
+    assert "id" not in body
+    assert body["balanceCents"] == 7777  # override applied
+    assert body["currency"] == "USD"  # allowlist field preserved
+    assert op["method"] == "PUT"
+    assert op["path"] == "/virtualcards/vc_b"
+
+
+# ---------------------------------------------------------------------------
 # create_card — recurring cards
 # ---------------------------------------------------------------------------
 

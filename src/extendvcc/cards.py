@@ -332,6 +332,55 @@ def _recurrence_payload(rec: Recurrence, balance_cents: int) -> dict[str, Any]:
     return payload
 
 
+def build_create_card_operation(
+    credit_card_id: str,
+    name: str,
+    balance_cents: int,
+    valid_to: Any = None,
+    *,
+    recurrence: Recurrence | None = None,
+    recipient_resolver: Callable[[], str],
+    token_factory: Callable[[], str],
+) -> dict[str, Any]:
+    """Shape a ``POST /virtualcards`` operation without dispatching it.
+
+    Returns an operation descriptor used by both the real ``create_card`` path
+    and the CLI dry-run path so the request body has a single source of truth.
+    The UUID correlation suffix is baked into the returned descriptor (not
+    regenerated per call) so a dry-run preview matches what a real run would send.
+
+    Args:
+        recipient_resolver: callable returning the recipient email. Real runs pass
+            an ``account_context()`` lookup; dry-run passes a network-free resolver.
+        token_factory: callable returning the short correlation token.
+    """
+    if (valid_to is None) == (recurrence is None):
+        raise ValueError("create_card: provide exactly one of valid_to or recurrence")
+    correlation_name = f"{name} [{token_factory()}]"
+    body: dict[str, Any] = {
+        "creditCardId": credit_card_id,
+        "displayName": correlation_name,
+        "expenseDetails": [],
+        "balanceCents": balance_cents,
+        "currency": "USD",
+        "receiptAttachmentIds": [],
+        "lowLimitAlert": {"alertEnabled": False, "amountThresholdCents": None},
+        "recipient": recipient_resolver(),
+    }
+    if recurrence is not None:
+        body["recurs"] = True
+        body["recurrence"] = _recurrence_payload(recurrence, balance_cents)
+    else:
+        body["validTo"] = _format_date(valid_to)
+    return {
+        "method": "POST",
+        "path": "/virtualcards",
+        "body": body,
+        "correlation_key": correlation_name,
+        "preview_accuracy": "exact",
+    }
+
+
 def create_card(
     credit_card_id: str,
     name: str,
@@ -349,27 +398,18 @@ def create_card(
     Extend is suffixed with a short UUID token so that a timed-out create can be
     matched by name during ``reconcile()``.
     """
-    if (valid_to is None) == (recurrence is None):
-        raise ValueError("create_card: provide exactly one of valid_to or recurrence")
     c = client or _default_client()
-    recipient = recipient or account_context()["email"]
-    token = uuid.uuid4().hex[:8]
-    correlation_name = f"{name} [{token}]"
-    body = {
-        "creditCardId": credit_card_id,
-        "displayName": correlation_name,
-        "expenseDetails": [],
-        "balanceCents": balance_cents,
-        "currency": "USD",
-        "receiptAttachmentIds": [],
-        "lowLimitAlert": {"alertEnabled": False, "amountThresholdCents": None},
-        "recipient": recipient,
-    }
-    if recurrence is not None:
-        body["recurs"] = True
-        body["recurrence"] = _recurrence_payload(recurrence, balance_cents)
-    else:
-        body["validTo"] = _format_date(valid_to)
+    operation = build_create_card_operation(
+        credit_card_id,
+        name,
+        balance_cents,
+        valid_to,
+        recurrence=recurrence,
+        recipient_resolver=lambda: recipient or account_context()["email"],
+        token_factory=lambda: uuid.uuid4().hex[:8],
+    )
+    correlation_name = operation["correlation_key"]
+    body = operation["body"]
     return _ledger_flow("create", correlation_name, lambda: c.post("/virtualcards", json_body=body))
 
 
@@ -452,35 +492,20 @@ def create_cards_bulk(
     return created
 
 
-def update_card(
+def build_update_card_operation(
     card_id: str,
+    overrides: dict[str, Any],
     *,
-    balance_cents: int | None = None,
-    name: str | None = None,
-    valid_to: Any = None,
-    recurs: bool | None = None,
-    client: Any = None,
-) -> VirtualCard:
-    """Update a virtual card using read-modify-write against the allowlist.
+    fetcher: Callable[[], Any],
+) -> dict[str, Any]:
+    """Shape a ``PUT /virtualcards/{id}`` operation via read-modify-write.
 
-    Only the fields passed as non-None kwargs are overridden. All other
-    allowlist fields from the current remote state are preserved.
+    ``fetcher`` performs the read-only GET of the current card; its result is
+    projected to the update allowlist, non-allowlist fields are warned about and
+    dropped, then ``overrides`` are applied. Shared by ``update_card`` and the
+    CLI dry-run path so the PUT body is shaped identically in both.
     """
-    c = client or _default_client()
-
-    # Build the override dict (public kwarg -> API field) from non-None kwargs.
-    overrides: dict[str, Any] = {}
-    if name is not None:
-        overrides["displayName"] = name
-    if balance_cents is not None:
-        overrides["balanceCents"] = balance_cents
-    if valid_to is not None:
-        overrides["validTo"] = _format_date(valid_to)
-    if recurs is not None:
-        overrides["recurs"] = recurs
-
-    # Fetch raw card body (read-modify-write to avoid losing server-set fields).
-    raw = _require(c.get(f"/virtualcards/{card_id}"), "virtualCard", "update_card GET response")
+    raw = _require(fetcher(), "virtualCard", "update_card GET response")
 
     # Project to allowlist.
     payload: dict[str, Any] = {k: raw[k] for k in UPDATE_PAYLOAD_FIELDS if k in raw}
@@ -496,6 +521,62 @@ def update_card(
 
     # Apply overrides.
     payload.update(overrides)
+
+    return {
+        "method": "PUT",
+        "path": f"/virtualcards/{card_id}",
+        "body": payload,
+        "preview_accuracy": "exact",
+    }
+
+
+def _update_overrides(
+    *,
+    balance_cents: int | None,
+    name: str | None,
+    valid_to: Any,
+    recurs: bool | None,
+) -> dict[str, Any]:
+    """Translate public update kwargs to the API field overrides (non-None only)."""
+    overrides: dict[str, Any] = {}
+    if name is not None:
+        overrides["displayName"] = name
+    if balance_cents is not None:
+        overrides["balanceCents"] = balance_cents
+    if valid_to is not None:
+        overrides["validTo"] = _format_date(valid_to)
+    if recurs is not None:
+        overrides["recurs"] = recurs
+    return overrides
+
+
+def update_card(
+    card_id: str,
+    *,
+    balance_cents: int | None = None,
+    name: str | None = None,
+    valid_to: Any = None,
+    recurs: bool | None = None,
+    client: Any = None,
+) -> VirtualCard:
+    """Update a virtual card using read-modify-write against the allowlist.
+
+    Only the fields passed as non-None kwargs are overridden. All other
+    allowlist fields from the current remote state are preserved.
+    """
+    c = client or _default_client()
+    overrides = _update_overrides(
+        balance_cents=balance_cents,
+        name=name,
+        valid_to=valid_to,
+        recurs=recurs,
+    )
+    operation = build_update_card_operation(
+        card_id,
+        overrides,
+        fetcher=lambda: c.get(f"/virtualcards/{card_id}"),
+    )
+    payload = operation["body"]
 
     key = f"update:{card_id}"
     return _ledger_flow("update", key, lambda: c.put(f"/virtualcards/{card_id}", json_body=payload))
