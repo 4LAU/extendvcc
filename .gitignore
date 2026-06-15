@@ -11,6 +11,9 @@ build/
 .codex/
 .ruff_cache/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.jsonl
 *.json
 !tests/fixtures/*.json
