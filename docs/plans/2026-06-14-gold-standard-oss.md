@@ -88,7 +88,9 @@ Create an empty `src/extendvcc/py.typed` file (PEP 561). Without this, the `Typi
 
 ### 7. README polish
 
-Add badges (CI status, license, Python versions). Fix the `reveal` example: change `extendvcc reveal <card-id> --json creds.json` to `extendvcc reveal <card-id> --json-path creds.json` (the CLI parser uses `--json-path PATH` for file output, not `--json` which is a global boolean flag). Add examples distinguishing masked stdout and `--json-path` secure file write. **Do not document `reveal --json` (raw PAN/CVC to stdout) as a normal usage pattern** — it conflicts with the security posture this plan establishes. The README should present `--json-path` as the primary credential-retrieval path, note that `reveal` without flags shows masked output, and mention that `--json` exists for scripting but outputs full PAN/CVC to stdout (with a warning).
+Add badges (CI status, license, Python versions). Fix the `reveal` example: change `extendvcc reveal <card-id> --json creds.json` to `extendvcc reveal <card-id> --json-path creds.json` (the CLI parser uses `--json-path PATH` for file output, not `--json` which is a global boolean flag). Add examples distinguishing masked stdout and `--json-path` secure file write.
+
+**Code-level reveal security:** The global `--json` flag must NOT emit raw PAN/CVC to stdout for `reveal`. Make `reveal` ignore global `--json` and instead return masked JSON (same masking as the non-JSON path). Full credentials only via `--json-path` (file output with 0600 permissions). Document this as a deliberate security boundary: stdout is routinely captured by shell logs, CI logs, agent transcripts, and command wrappers — documentation warnings do not prevent leakage. If a future scripting use case requires stdout credentials, gate it behind an explicit opt-in flag like `--unsafe-reveal-stdout` that cannot be triggered by the global `--json` habit.
 
 ### 7a. Add `activate` CLI subcommand
 
@@ -140,6 +142,7 @@ Update `cli.py` exception handlers and command returns to use these codes. Docum
 4. `PayWithExtendError` → exit 1
 5. `ValueError` → **do not catch broadly as USAGE.** Library-internal `ValueError` raises (e.g., `org_id` missing in `usage()`, absolute URL refusal in `client.py`) are not CLI user-input errors. Either: (a) introduce a typed `CLIInputError(ValueError)` for CLI-layer validation and map only that to exit 2, or (b) convert CLI-owned validation `print()+return 1` to `sys.exit(EXIT_USAGE)` directly in each handler, leaving library `ValueError` to fall through to exit 1 (ERROR)
 6. `argparse` bad-input: override `parser.error()` to call `sys.exit(2)` instead of the default `sys.exit(2)` (accidental match, but make it explicit via the exit code constant)
+7. No-subcommand path: `main()` currently returns `1` when no command is provided (line 607). This is a usage error, not a runtime error — return `EXIT_USAGE` (2). Similarly, all CLI-owned validation failures (mutually exclusive `create` flags, empty bulk CSV, missing update fields, missing `clear-disabled --manual`) should use `EXIT_USAGE` consistently, not `return 1`.
 
 ### 11. --dry-run on destructive commands
 
@@ -152,7 +155,7 @@ Behavior varies by command:
 - **cancel / close:** these are bodyless PUTs (`PUT /virtualcards/{id}/cancel` and `/close`) — there is no request body to build. Dry-run should emit an operation descriptor to stdout as JSON: `{"method": "PUT", "path": "/virtualcards/{id}/cancel", "card_id": "...", "reversible": true|false, "body": null}`. Print a human summary to stderr. No payload builder needed.
 - **update:** the builder performs the read-only GET to show the accurate merged payload (GET is non-destructive). Print the current state and the would-be PUT body to stdout as JSON. If the GET is not acceptable, fall back to showing only the override fields as a "semantic patch" and document that the full body requires the GET. Either way, no mutation is made.
 
-`create_card()` derives `recipient` via `account_context()` (which loads the session). Dry-run create should use a placeholder like `"<session-email>"` if no session exists, rather than failing with an auth error. Label the output as an approximate semantic preview, not "full request body," when no active session exists.
+`create_card()` derives `recipient` via `account_context()` (which loads the session). **Dry-run builders must never make network calls.** `account_context()` may call `/users/me` and refresh tokens — this violates the "no API call" contract. Dry-run create must resolve recipient from: (a) an explicit `--recipient` flag, (b) the email from `auth.load_session()` (local file read, no network), or (c) `"<session-email>"` placeholder if no session exists. The payload builder's `account_context()` dependency must be injected, not hardcoded, so dry-run can substitute a non-network path. Label the output as an approximate semantic preview, not "full request body," when no active session or explicit recipient is provided.
 
 ### 12. Stdout/stderr discipline
 
@@ -161,6 +164,8 @@ Current state: errors already go to stderr. Data (--json and tables) goes to std
 Fix: when `--json` is passed, ONLY structured JSON goes to stdout. All human messages (progress, confirmations, hints) go to stderr. When `--json` is NOT passed, current behavior is fine (humans read stdout).
 
 Implementation: introduce a `_info(msg)` helper that prints to stderr, replace bare `print()` calls for non-data output in --json code paths. **Also fix `_confirm()`**: Python's `input(prompt)` writes the prompt to stdout; change to `print(prompt, end="", file=sys.stderr); input()` so confirmation prompts don't pollute JSON output. Similarly, route all pre-result prints (operation summaries in `create`, warnings in `close`) through `_info()` unconditionally — they are human-oriented and belong on stderr regardless of `--json`.
+
+**Also fix login and OTP prompts:** `_cmd_login()` uses `input("Email: ")` which writes the prompt to stdout. `make_otp_callback()` returns `input` or `input("IMAP retrieval timed out...")` — both write prompts to stdout. These contaminate JSON output on the most common first-run path (`login`). Use the same `_info()` + bare `input()` pattern for all interactive prompts: email, password (already via `getpass`), OTP fallback, and confirmation. Add CLI tests for `extendvcc --json login` verifying no prompt text appears on stdout.
 
 ## Non-goals
 
@@ -174,14 +179,14 @@ Implementation: introduce a `_info(msg)` helper that prints to stderr, replace b
 
 ## Task grouping
 
-**Group A — Documentation (no code changes):**
-Tasks 1-8 (CLAUDE.md scrub, AGENTS.md, pyproject.toml, CHANGELOG, SECURITY.md, .gitignore, py.typed, README badges + reveal fix + activate subcommand (7a), GitHub setup)
+**Group A — Documentation and config (no runtime code changes):**
+Tasks 1-6, 6a, 7 (partial), 8 (CLAUDE.md scrub, AGENTS.md, pyproject.toml, CHANGELOG, SECURITY.md, .gitignore, py.typed, README badges, GitHub setup). README content for CLI commands added in Group C (activate, exit codes, dry-run) should be written in Group C to avoid documenting behavior before it exists.
 
 **Group B — CI/CD:**
 Task 9 (PyPI publish job + test gating for all release artifacts in release.yml)
 
 **Group C — Code polish:**
-Tasks 9a, 10-12 (login credential pass-through fix, exit codes with full exception mapping, --dry-run with correct cancel/close semantics, stdout/stderr, activate subcommand)
+Tasks 7a, 9a, 10-12 (activate subcommand, login credential pass-through fix, exit codes with full exception mapping, --dry-run with correct cancel/close semantics, stdout/stderr, reveal security boundary). Also owns README sections that document new CLI behavior (exit codes table, dry-run usage, activate lifecycle).
 
 **Group D — CLI tests:**
 New `tests/test_cli.py` covering exit codes, --json isolation, --dry-run output, activate lifecycle, argparse errors. Depends on Group C.
