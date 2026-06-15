@@ -2,6 +2,9 @@ import datetime
 import importlib.util
 import pathlib
 import sys
+from types import SimpleNamespace
+
+from extendvcc.models import CardStatus
 
 _SMOKE_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "smoke_test.py"
 
@@ -85,3 +88,101 @@ def test_step_records_failure_and_reraises():
     assert h.results[-1].name == "boom"
     assert h.results[-1].passed is False
     assert "nope" in h.results[-1].detail
+
+
+def _closed(cid):
+    # cleanup() inspects the returned card's status; a real close_card returns a
+    # VirtualCard. A minimal stub with .status == CLOSED is enough here.
+    return SimpleNamespace(id=cid, status=CardStatus.CLOSED)
+
+
+def test_cleanup_cancels_and_closes_every_created_card():
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_1")
+    h.register_created("vc_2")
+    calls = []
+
+    def _close(cid):
+        calls.append(("close", cid))
+        return _closed(cid)
+
+    leftovers = h.cleanup(
+        cancel=lambda cid: calls.append(("cancel", cid)),
+        close=_close,
+        warn=lambda msg: calls.append(("warn", msg)),
+    )
+    assert leftovers == []
+    assert calls == [
+        ("cancel", "vc_1"),
+        ("close", "vc_1"),
+        ("cancel", "vc_2"),
+        ("close", "vc_2"),
+    ]
+
+
+def test_cleanup_skips_cards_already_marked_closed():
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_done")
+    h.mark_closed("vc_done")
+    calls = []
+    leftovers = h.cleanup(
+        cancel=lambda cid: calls.append(("cancel", cid)),
+        close=lambda cid: calls.append(("close", cid)) or _closed(cid),
+        warn=lambda msg: calls.append(("warn", msg)),
+    )
+    assert leftovers == []
+    assert calls == []  # already torn down by the lifecycle close step
+
+
+def test_cleanup_reports_leftover_when_close_fails():
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_bad")
+    warnings = []
+
+    def failing_close(cid):
+        raise RuntimeError("close failed")
+
+    leftovers = h.cleanup(
+        cancel=lambda cid: None,
+        close=failing_close,
+        warn=warnings.append,
+    )
+    assert leftovers and leftovers[0][0] == "vc_bad"
+    assert warnings and "vc_bad" in warnings[0]
+    assert "110.01" in warnings[0]
+
+
+def test_cleanup_reports_leftover_when_close_returns_non_closed_status():
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_still_active")
+    warnings = []
+
+    leftovers = h.cleanup(
+        cancel=lambda cid: None,
+        close=lambda cid: SimpleNamespace(id=cid, status=CardStatus.ACTIVE),
+        warn=warnings.append,
+    )
+    assert leftovers and leftovers[0][0] == "vc_still_active"
+    assert warnings and "vc_still_active" in warnings[0]
+    assert "110.01" in warnings[0]
+
+
+def test_cleanup_still_closes_when_cancel_fails():
+    h = smoke.Harness(clock=_fake_clock())
+    h.register_created("vc_cancel_4xx")
+    calls = []
+
+    def failing_cancel(cid):
+        raise RuntimeError("already cancelled")
+
+    def _close(cid):
+        calls.append(("close", cid))
+        return _closed(cid)
+
+    leftovers = h.cleanup(
+        cancel=failing_cancel,
+        close=_close,
+        warn=lambda msg: calls.append(("warn", msg)),
+    )
+    assert ("close", "vc_cancel_4xx") in calls  # close attempted despite cancel failure
+    assert leftovers == []  # a failed cancel alone is NOT a leftover; close succeeded

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+from extendvcc.models import CardStatus
+
 SMOKE_CARD_BALANCE_CENTS = 11001  # $110.01 — distinctive, easy to spot if cleanup fails
 SMOKE_CARD_NAME_PREFIX = "extendvcc-smoke"
 
@@ -79,3 +81,44 @@ class Harness:
             self.results.append(StepResult(name, False, self._clock() - start, repr(exc)))
             raise
         self.results.append(StepResult(name, True, self._clock() - start))
+
+    def register_created(self, card_id: str) -> None:
+        self._created.append(card_id)
+
+    def mark_closed(self, card_id: str) -> None:
+        """Record that a card was already torn down by the lifecycle close step."""
+        self._closed.add(card_id)
+
+    def cleanup(
+        self,
+        *,
+        cancel: Callable[[str], object],
+        close: Callable[[str], object],
+        warn: Callable[[str], None],
+    ) -> list[tuple[str, str]]:
+        leftovers: list[tuple[str, str]] = []
+        for card_id in self._created:
+            if card_id in self._closed:
+                continue  # lifecycle already cancelled+closed this one; don't re-hit the live API
+            # Independent try blocks: a failed cancel (e.g. the card is already
+            # CANCELLED and the API 4xxes) must NOT prevent the close attempt.
+            # close() is the permanent money-safety operation — always try it.
+            try:
+                cancel(card_id)
+            except Exception:
+                pass  # tolerated; close below is what actually protects the money
+            try:
+                card = close(card_id)
+            except Exception as exc:
+                leftovers.append((card_id, repr(exc)))  # close raised -> not closed
+            else:
+                # A non-raising close is not proof: the live API may return 200 with
+                # a non-CLOSED status (the exact drift this harness exists to catch).
+                # `close_card` returns a VirtualCard; verify its status.
+                status = getattr(card, "status", None)
+                if status != CardStatus.CLOSED:
+                    leftovers.append((card_id, f"close returned status {status!r}, expected CLOSED"))
+        dollars = SMOKE_CARD_BALANCE_CENTS / 100
+        for card_id, err in leftovers:
+            warn(f"LEFTOVER smoke card {card_id} (${dollars:.2f}) not closed: {err} — close it manually")
+        return leftovers
