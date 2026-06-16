@@ -10,6 +10,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ---
 
+## [0.1.2] - 2026-06-15
+
+### Security
+
+- IMAP OTP retrieval now verifies the mail server's TLS certificate and hostname. Previously the connection accepted any certificate, exposing the IMAP password and login OTP to a man-in-the-middle. A failed or untrusted certificate now falls back to the manual OTP prompt instead of connecting.
+- All third-party GitHub Actions are pinned to commit SHAs to close a supply-chain risk from mutable version tags.
+
+### Fixed
+
+- Any IMAP failure (unreachable host, bad app password, mid-session drop) now degrades to the manual OTP prompt instead of crashing login.
+
+---
+
 ## [0.1.1] - 2026-06-15
 
 ### Fixed
@@ -37,6 +50,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Python API:** public re-exports in `extendvcc.__init__` for programmatic use.
 - **Typed:** `py.typed` marker (PEP 561); type hints throughout.
 
-[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/4LAU/extendvcc/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/4LAU/extendvcc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/4LAU/extendvcc/releases/tag/v0.1.0
