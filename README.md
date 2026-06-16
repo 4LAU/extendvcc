@@ -27,7 +27,8 @@ Standalone binary (no Python required): download from [GitHub Releases](../../re
 ## Quick Start
 
 ```bash
-# Log in (interactive email + password, device remembered)
+# Log in: prompts for email, password, and the emailed OTP. Device is remembered,
+# so you won't be asked again on this machine for a while. No setup required.
 extendvcc login
 
 # List parent cards
@@ -37,10 +38,31 @@ extendvcc accounts
 extendvcc cards
 ```
 
-Enrolling a parent card is a three-step lifecycle: `extendvcc enroll ...` registers
-the card and triggers an issuer verification email, you click the link in that email,
-then `extendvcc activate <id>` pulls the card from PENDING to ACTIVE. Re-run `activate`
-if it still reports PENDING.
+## Enroll a Parent Card
+
+Enrolling a parent card is a three-step lifecycle:
+
+```bash
+# 1. Register the card (prompts for card number + CVC; triggers an issuer
+#    verification email). Card details are typed at a prompt, never passed as flags.
+extendvcc enroll \
+  --display-name "My Amex" \
+  --cardholder-name "Jane Doe" \
+  --issuer-id iss_xxx \
+  --expires 2028-12-31 \
+  --address1 "123 Main St" \
+  --city "Springfield" \
+  --province "IL" \
+  --postal "62701"
+
+# 2. Your card issuer (e.g. Amex) emails you a verification request. Open it and
+#    approve manually before activation will succeed.
+
+# 3. Pull the card from PENDING to ACTIVE. Re-run if it still reports PENDING.
+extendvcc activate <card-id>
+```
+
+Run `extendvcc issuers` to find the `--issuer-id` for your card.
 
 ## Create a One-Time Card
 
@@ -109,15 +131,34 @@ The CLI uses stable exit codes so scripts and CI can branch on the outcome:
 | 4    | DISABLED       | Kill switch tripped (account-risk); run `clear-disabled --manual`. |
 | 5    | API_ERROR      | Extend returned an error response.                        |
 
-## Environment Variables
+## Unattended / Automation Use
+
+**You can skip this entire section for normal use.** `extendvcc login` prompts for
+everything it needs. The variables below only matter when you want to run the CLI with
+no human present (a cron job, CI pipeline, or script), where there's nothing to type
+into a prompt.
+
+To log in non-interactively, supply the credentials as environment variables. Extend
+still requires a one-time code (OTP) emailed on login; set the IMAP variables so the CLI
+can read that code from your inbox automatically. If IMAP retrieval times out, it falls
+back to a manual prompt.
 
 | Variable | Purpose |
 |---|---|
-| `EXTENDVCC_EMAIL` | Extend account email (overrides interactive prompt) |
-| `EXTENDVCC_PASSWORD` | Extend account password (overrides interactive prompt) |
-| `EXTENDVCC_IMAP_USER` | IMAP email for automatic OTP retrieval |
-| `EXTENDVCC_IMAP_PASSWORD` | IMAP app password |
+| `EXTENDVCC_EMAIL` | Extend account email (replaces the email prompt) |
+| `EXTENDVCC_PASSWORD` | Extend account password (replaces the password prompt) |
+| `EXTENDVCC_IMAP_USER` | Inbox address to read the login OTP from |
+| `EXTENDVCC_IMAP_PASSWORD` | IMAP app password for that inbox |
 | `EXTENDVCC_IMAP_HOST` | IMAP server (default: `imap.gmail.com`) |
+
+Inject these from your secrets manager or CI vault at runtime. Don't commit them to a file.
+
+### Advanced overrides
+
+Rarely needed. Change only if the defaults don't fit your setup.
+
+| Variable | Purpose |
+|---|---|
 | `EXTENDVCC_STATE_DIR` | Override session/state directory |
 | `EXTENDVCC_LEDGER_PATH` | Override ledger file path |
 | `EXTENDVCC_BRAND_ID` | Override Extend brand ID |
@@ -141,7 +182,7 @@ See `extendvcc.__init__` for the full list of exported functions and models.
 
 ## Testing
 
-The `pytest` suite runs entirely offline against fakes — it never touches the network.
+The `pytest` suite runs entirely offline against fakes. It never touches the network.
 
 ## Security Notes
 
