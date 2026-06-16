@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import imaplib
 import ssl
+
+import pytest
 
 from extendvcc import imap_otp
 
@@ -42,22 +45,33 @@ class TestExtractCode:
 
 
 class TestFetchOtpConnectionFailure:
-    """Invariant: a failed TLS handshake or unreachable IMAP server degrades to
-    None so login can fall back to the manual OTP prompt, never raising."""
+    """Invariant: any IMAP failure (bad cert, unreachable host, bad password,
+    mid-session drop) degrades to None so login can fall back to the manual OTP
+    prompt, never raising."""
 
-    def _creds(self):
-        return ("user@example.com", "app-password", "imap.example.com")
+    CREDS = ("user@example.com", "app-password", "imap.example.com")
 
-    def test_cert_verification_failure_returns_none(self, monkeypatch):
-        def raise_cert_error(*args, **kwargs):
-            raise ssl.SSLCertVerificationError("hostname mismatch")
+    @pytest.mark.parametrize(
+        "exc",
+        [ssl.SSLCertVerificationError("hostname mismatch"), OSError("connection refused")],
+    )
+    def test_constructor_failure_returns_none(self, monkeypatch, exc):
+        def raise_exc(*args, **kwargs):
+            raise exc
 
-        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", raise_cert_error)
-        assert imap_otp.fetch_otp(0.0, _credentials=self._creds()) is None
+        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", raise_exc)
+        assert imap_otp.fetch_otp(0.0, _credentials=self.CREDS) is None
 
-    def test_unreachable_server_returns_none(self, monkeypatch):
-        def raise_oserror(*args, **kwargs):
-            raise OSError("connection refused")
+    def test_login_failure_returns_none_and_logs_out(self, monkeypatch):
+        logged_out = []
 
-        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", raise_oserror)
-        assert imap_otp.fetch_otp(0.0, _credentials=self._creds()) is None
+        class FakeConn:
+            def login(self, *args):
+                raise imaplib.IMAP4.error("authentication failed")
+
+            def logout(self):
+                logged_out.append(True)
+
+        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", lambda *a, **k: FakeConn())
+        assert imap_otp.fetch_otp(0.0, _credentials=self.CREDS) is None
+        assert logged_out == [True]

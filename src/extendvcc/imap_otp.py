@@ -97,12 +97,14 @@ def fetch_otp(
     deadline = time.monotonic() + max_wait
 
     # Pass an explicit verifying context: imaplib's default omits certificate and
-    # hostname checks, leaving the IMAP password and login OTP open to a MITM. The
-    # handshake runs in the constructor, so a failed/untrusted cert raises here;
-    # degrade to the manual OTP prompt instead of crashing login.
+    # hostname checks, leaving the IMAP password and login OTP open to a MITM. Any
+    # IMAP failure (untrusted cert, unreachable host, bad app password, mid-session
+    # drop) degrades to the manual OTP prompt rather than crashing login. The
+    # constructor runs the TLS handshake, so it gets its own guard: conn must be
+    # bound before the finally can log out.
     try:
         conn = imaplib.IMAP4_SSL(imap_server, DEFAULT_IMAP_PORT, ssl_context=ssl.create_default_context())
-    except (ssl.SSLError, OSError, imaplib.IMAP4.error):
+    except (ssl.SSLError, OSError):
         return None
     try:
         conn.login(imap_email, imap_password)
@@ -144,6 +146,8 @@ def fetch_otp(
 
             time.sleep(poll_interval)
 
+        return None
+    except (ssl.SSLError, OSError, imaplib.IMAP4.error):
         return None
     finally:
         try:
