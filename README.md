@@ -143,12 +143,6 @@ See `extendvcc.__init__` for the full list of exported functions and models.
 
 The `pytest` suite runs entirely offline against fakes — it never touches the network.
 
-### Release smoke test
-
-Before tagging a release, run the live smoke test against a real account to confirm
-the tool still agrees with Extend's API: see [docs/smoke-testing.md](docs/smoke-testing.md).
-The offline `pytest` suite never touches the network; this is the layer that does.
-
 ## Security Notes
 
 - The ledger never stores PAN or CVC data.
