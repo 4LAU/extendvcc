@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ssl
+
 from extendvcc import imap_otp
 
 EXTEND_HTML_BODY = """
@@ -37,3 +39,25 @@ class TestExtractCode:
     def test_ignores_non_6_digit_numbers(self):
         assert imap_otp.extract_code("Your balance is 12345 dollars") is None
         assert imap_otp.extract_code("Order #1234567 confirmed") is None
+
+
+class TestFetchOtpConnectionFailure:
+    """Invariant: a failed TLS handshake or unreachable IMAP server degrades to
+    None so login can fall back to the manual OTP prompt, never raising."""
+
+    def _creds(self):
+        return ("user@example.com", "app-password", "imap.example.com")
+
+    def test_cert_verification_failure_returns_none(self, monkeypatch):
+        def raise_cert_error(*args, **kwargs):
+            raise ssl.SSLCertVerificationError("hostname mismatch")
+
+        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", raise_cert_error)
+        assert imap_otp.fetch_otp(0.0, _credentials=self._creds()) is None
+
+    def test_unreachable_server_returns_none(self, monkeypatch):
+        def raise_oserror(*args, **kwargs):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(imap_otp.imaplib, "IMAP4_SSL", raise_oserror)
+        assert imap_otp.fetch_otp(0.0, _credentials=self._creds()) is None

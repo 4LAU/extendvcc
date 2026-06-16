@@ -7,6 +7,7 @@ import email
 import imaplib
 import os
 import re
+import ssl
 import sys
 import time
 from collections.abc import Callable
@@ -95,7 +96,14 @@ def fetch_otp(
     imap_email, imap_password, imap_server = creds
     deadline = time.monotonic() + max_wait
 
-    conn = imaplib.IMAP4_SSL(imap_server, DEFAULT_IMAP_PORT)
+    # Pass an explicit verifying context: imaplib's default omits certificate and
+    # hostname checks, leaving the IMAP password and login OTP open to a MITM. The
+    # handshake runs in the constructor, so a failed/untrusted cert raises here;
+    # degrade to the manual OTP prompt instead of crashing login.
+    try:
+        conn = imaplib.IMAP4_SSL(imap_server, DEFAULT_IMAP_PORT, ssl_context=ssl.create_default_context())
+    except (ssl.SSLError, OSError, imaplib.IMAP4.error):
+        return None
     try:
         conn.login(imap_email, imap_password)
         conn.select("INBOX")
