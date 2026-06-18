@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "extendvcc-cli"
-version = "0.1.2"
+version = "0.2.0"
 description = "Unofficial CLI and Python client for the Extend virtual card API"
 readme = "README.md"
 license = "MIT"

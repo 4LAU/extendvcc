@@ -226,17 +226,26 @@ def _cmd_cards(args: argparse.Namespace) -> int:
 
 
 def _cmd_card(args: argparse.Namespace) -> int:
-    from .cards import get_card
+    from .cards import get_card, held_cents
 
     card = get_card(args.id)
     if getattr(args, "json", False):
         print(_json_out(_card_to_dict(card)))
     else:
+        held = held_cents(card)
         print(f"ID:            {card.id}")
         print(f"Name:          {card.name}")
         print(f"Last 4:        {card.last4}")
         print(f"Status:        {card.status.value}")
-        print(f"Balance:       ${card.balance_cents / 100:.2f}")
+        # Spend breakdown: limit and settled spend are only present on the GET
+        # response; show them (plus derived holds) when available, else fall
+        # back to the available-balance line alone.
+        if card.limit_cents is not None:
+            print(f"Limit:         ${card.limit_cents / 100:.2f}")
+            print(f"Spent:         ${(card.spent_cents or 0) / 100:.2f}")
+        if held is not None:
+            print(f"Held:          ${held / 100:.2f}")
+        print(f"Available:     ${card.balance_cents / 100:.2f}")
         print(f"Credit Card:   {card.credit_card_id}")
         print(f"Valid From:    {card.valid_from or 'N/A'}")
         print(f"Valid To:      {card.valid_to or 'N/A'}")

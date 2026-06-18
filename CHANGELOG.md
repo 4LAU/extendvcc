@@ -10,6 +10,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ---
 
+## [0.2.0] - 2026-06-18
+
+### Added
+
+- `card` now shows a spend breakdown — **Limit**, **Spent**, **Held**, and **Available** — instead of only the available balance. "Held" is the pending-authorization amount, derived as `limit - spent - available`. The underlying `limitCents`, `spentCents`, and `lifetimeSpentCents` fields (previously dropped) are mapped onto `VirtualCard` and exposed via `--json`. Lines render only when the data is present, so list-style responses that omit these fields are unaffected.
+
+---
+
 ## [0.1.2] - 2026-06-15
 
 ### Security

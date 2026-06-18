@@ -31,6 +31,14 @@ class VirtualCard:
     valid_to: date | None
     notes: str | None
     created_at: datetime | None
+    # Optional spend breakdown — present on the single-card GET, often omitted
+    # from list responses, so all three default to None. ``balance_cents`` is the
+    # available balance; ``limit_cents`` is the total limit; ``spent_cents`` is
+    # settled spend. Pending authorizations (holds) are derived, not returned —
+    # see ``cards.held_cents``.
+    limit_cents: int | None = None
+    spent_cents: int | None = None
+    lifetime_spent_cents: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

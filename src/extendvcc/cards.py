@@ -81,9 +81,30 @@ def _map_virtual_card(card: dict[str, Any]) -> VirtualCard:
             valid_to=_parse_date(card.get("validTo")),
             notes=None,
             created_at=_parse_datetime(card.get("createdAt")),
+            # Spend breakdown is absent from some list responses; use .get so a
+            # missing field maps to None instead of crashing the whole listing.
+            limit_cents=card.get("limitCents"),
+            spent_cents=card.get("spentCents"),
+            lifetime_spent_cents=card.get("lifetimeSpentCents"),
         )
     except (KeyError, TypeError) as exc:
         raise PayWithExtendError(f"unexpected virtual card shape: missing field {exc}") from exc
+
+
+def held_cents(card: VirtualCard) -> int | None:
+    """Pending authorizations (holds) on a card, in cents.
+
+    Extend reports the available balance, the total limit, and settled spend,
+    but not holds directly. A hold is the gap between them:
+
+        held = limit - settled spend - available balance
+
+    Returns None when ``limit_cents`` is unknown (e.g. a list response that
+    omitted it), since the hold cannot be derived without the limit.
+    """
+    if card.limit_cents is None:
+        return None
+    return card.limit_cents - (card.spent_cents or 0) - card.balance_cents
 
 
 def _default_client() -> Any:

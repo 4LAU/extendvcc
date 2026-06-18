@@ -212,6 +212,71 @@ def test_get_card_parses_virtual_card():
     assert result.notes is None
 
 
+def test_map_virtual_card_maps_limit_spent_lifetime():
+    """Wire contract: limit/spent amounts map to the right fields.
+
+    A silent key mismatch (e.g. reading ``spentCents`` into ``limit_cents``)
+    would surface plausible-but-wrong financial figures with no crash.
+    """
+    raw = {**_VC_TEMPLATE, "limitCents": 10100, "spentCents": 2500, "lifetimeSpentCents": 9000}
+    card = cards._map_virtual_card(raw)
+    assert card.limit_cents == 10100
+    assert card.spent_cents == 2500
+    assert card.lifetime_spent_cents == 9000
+
+
+def test_held_cents_computes_pending_authorizations():
+    """held = limit - settled spend - available balance.
+
+    Wrong arithmetic here misreports financial exposure with plausible numbers.
+    A $101 limit with a $100 pending hold and nothing settled = $100 held;
+    once the $100 settles (spent=10000) the hold clears to $0.
+    """
+    from dataclasses import replace
+    from datetime import date
+
+    pending = cards.VirtualCard(
+        id="vc_h",
+        credit_card_id="cc_1",
+        name="x",
+        last4="1342",
+        status=cards.CardStatus.ACTIVE,
+        balance_cents=100,
+        valid_from=date(2026, 1, 1),
+        valid_to=date(2027, 12, 31),
+        notes=None,
+        created_at=None,
+        limit_cents=10100,
+        spent_cents=0,
+        lifetime_spent_cents=0,
+    )
+    assert cards.held_cents(pending) == 10000
+
+    settled = replace(pending, spent_cents=10000)
+    assert cards.held_cents(settled) == 0
+
+
+def test_held_cents_none_when_limit_unknown():
+    """A list response that omits ``limitCents`` must yield held=None, not a
+    bogus number computed against a missing limit."""
+    from datetime import date
+
+    card = cards.VirtualCard(
+        id="vc_h2",
+        credit_card_id="cc_1",
+        name="x",
+        last4="1342",
+        status=cards.CardStatus.ACTIVE,
+        balance_cents=100,
+        valid_from=date(2026, 1, 1),
+        valid_to=date(2027, 12, 31),
+        notes=None,
+        created_at=None,
+    )
+    assert card.limit_cents is None
+    assert cards.held_cents(card) is None
+
+
 # ---------------------------------------------------------------------------
 # usage
 # ---------------------------------------------------------------------------
