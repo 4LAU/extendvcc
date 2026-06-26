@@ -75,6 +75,7 @@ where the CLI uses the generic code, so release drift is loud).
 | `cards` / `list_cards` | `list` step | |
 | `reveal` / `reveal_card` | `reveal` step | validated, never printed |
 | `update` / `update_card` | `update` step | |
+| `update-account` / `update_credit_card_address` | run manually (see below) | **excluded** — mutates a real parent card's billing address |
 | `usage` | `usage` step | |
 | `cancel` / `cancel_card` | `cancel` step + cleanup | |
 | `close` / `close_card` | `close` step + cleanup | |
@@ -87,3 +88,27 @@ where the CLI uses the generic code, so release drift is loud).
 `enroll`/`activate` are excluded on purpose: they activate a real credit card,
 which is not a disposable test artifact. Verify those manually when the auth or
 enrollment flow changes.
+
+### Manual: `update-account` (parent-card billing address)
+
+This mutates a real parent card, so it is not in the automated script. Verify it
+manually — and **gate on the GET first**, since the full-object read-modify-write is
+only safe if `GET /creditcards/{id}` returns the full card object:
+
+```bash
+# 1. Gate — dry-run does the read-only GET and prints the merged PUT body.
+extendvcc update-account <cc_id> --address1 "1 Test St" --city "Testville" \
+  --province CA --postal 95051 --dry-run
+```
+
+The printed JSON should be a **full** card object with the nested `address` overridden —
+not the thin `{id,last4,status,displayName}` shape that `list_credit_cards` returns. If
+it is thin (or the command raises the thin-GET error), **stop** — the round-trip is
+unsafe and the design must be revisited. `build_update_credit_card_operation` also raises
+on a thin GET as a runtime safety net.
+
+```bash
+# 2. Apply for real, then confirm via `extendvcc accounts` / a live transaction.
+extendvcc update-account <cc_id> --address1 "1 Test St" --city "Testville" \
+  --province CA --postal 95051 --yes
+```

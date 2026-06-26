@@ -553,6 +553,63 @@ def _update_dry_run(args: argparse.Namespace, kwargs: dict[str, Any]) -> int:
     return EXIT_OK
 
 
+def _cmd_update_account(args: argparse.Namespace) -> int:
+    from .cards import update_credit_card_address
+
+    address = {
+        "address1": args.address1,
+        "city": args.city,
+        "province": args.province,
+        "postal": args.postal,
+    }
+    # Preserve-on-omit: only send address2 when the user passed --address2 (default
+    # None), so updating other fields keeps an existing suite/apt line. Pass
+    # --address2 "" to explicitly clear it.
+    if getattr(args, "address2", None) is not None:
+        address["address2"] = args.address2
+    country = getattr(args, "country", None)
+
+    if getattr(args, "dry_run", False):
+        return _update_account_dry_run(args, address, country)
+
+    _info(f"Updating billing address for {args.id}:")
+    _info(f"  {address['address1']}, {address['city']}, {address['province']} {address['postal']}")
+    if not _confirm("Proceed? [y/N] ", yes=getattr(args, "yes", False)):
+        _info("Cancelled.")
+        return EXIT_ERROR
+
+    card = update_credit_card_address(args.id, address, country=country)
+    if getattr(args, "json", False):
+        print(_json_out(_card_to_dict(card)))
+    else:
+        print(f"Updated: {card.id} (last4={card.last4}, status={card.status.value})")
+    return EXIT_OK
+
+
+def _update_account_dry_run(args: argparse.Namespace, address: dict[str, Any], country: str | None) -> int:
+    """Preview an address update. The read-only GET is allowed (non-destructive) so
+    the merged PUT body is accurate; no mutation is performed."""
+    from .cards import (
+        _default_client,
+        _require_address_fields,
+        build_update_credit_card_address_operation,
+    )
+
+    # Enforce the same contract a real run would (argparse guarantees presence, not
+    # non-emptiness); the real path validates inside update_credit_card_address.
+    _require_address_fields(address)
+    client = _default_client()
+    operation = build_update_credit_card_address_operation(
+        args.id,
+        address,
+        country,
+        fetcher=lambda: client.get(f"/creditcards/{args.id}"),
+    )
+    _info(f"[dry-run] update-account {args.id} — no mutation made.")
+    print(_json_out(operation["body"]))
+    return EXIT_OK
+
+
 def _bodyless_descriptor(card_id: str, *, action: str, reversible: bool) -> dict[str, Any]:
     """Build a dry-run descriptor for a bodyless PUT (cancel/close)."""
     return {
@@ -782,6 +839,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--valid-to", default=None, help="New expiration date YYYY-MM-DD")
     p.add_argument("--dry-run", action="store_true", help="Preview the merged PUT body (read-only GET, no mutation)")
 
+    # update-account
+    p = sub.add_parser("update-account", help="Update a parent credit card's billing address")
+    p.add_argument("id", help="Credit card ID (cc_...)")
+    p.add_argument("--address1", required=True, help="Billing address line 1")
+    p.add_argument(
+        "--address2",
+        default=None,
+        help="Billing address line 2 (omit to keep the existing value; pass '' to clear)",
+    )
+    p.add_argument("--city", required=True, help="Billing city")
+    p.add_argument("--province", required=True, help="Billing state/province")
+    p.add_argument("--postal", required=True, help="Billing postal/ZIP code (string; leading zeros kept)")
+    p.add_argument(
+        "--country",
+        default=None,
+        help="Country code (defaults to the card's current value; cross-country changes are "
+        "unverified — the nested countryCode is left as-is)",
+    )
+    p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    p.add_argument("--dry-run", action="store_true", help="Preview the merged PUT body (read-only GET, no mutation)")
+
     # cancel
     p = sub.add_parser("cancel", help="Cancel a virtual card (reversible)")
     p.add_argument("id", help="Virtual card ID")
@@ -823,6 +901,7 @@ _COMMANDS: dict[str, Any] = {
     "bulk": _cmd_bulk,
     "reveal": _cmd_reveal,
     "update": _cmd_update,
+    "update-account": _cmd_update_account,
     "cancel": _cmd_cancel,
     "close": _cmd_close,
     "reconcile": _cmd_reconcile,

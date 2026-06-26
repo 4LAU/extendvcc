@@ -14,6 +14,7 @@ from extendvcc.cards import (
     reconcile,
     reveal_card,
     update_card,
+    update_credit_card_address,
     usage,
 )
 from extendvcc.models import CardStatus, CreditCard, Issuer, Recurrence, VirtualCard
@@ -43,4 +44,5 @@ __all__ = [
     # enroll
     "activate_credit_card",
     "enroll_credit_card",
+    "update_credit_card_address",
 ]

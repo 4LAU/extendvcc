@@ -551,6 +551,143 @@ def build_update_card_operation(
     }
 
 
+_CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
+
+
+def _require_address_fields(address: dict[str, Any]) -> None:
+    """Raise ValueError naming any missing or empty required billing-address field.
+
+    Shared by the library path and the CLI dry-run so a preview enforces the same
+    contract as a real run (argparse ``required=True`` guarantees presence, not
+    non-emptiness — ``--address1 ""`` must still be rejected).
+    """
+    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
+    if missing:
+        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
+
+
+def build_update_credit_card_address_operation(
+    credit_card_id: str,
+    address: dict[str, Any],
+    country: str | None,
+    *,
+    fetcher: Callable[[], Any],
+) -> dict[str, Any]:
+    """Shape a ``PUT /creditcards/{id}`` address change via full-object read-modify-write.
+
+    ``fetcher`` performs the read-only GET of the current card. Its result (wrapped
+    in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, with
+    the new ``address`` merged one level deep into the existing nested ``address`` —
+    so unknown keys like ``countryCode`` survive. ``country``, when given, is set
+    both inside the nested address and at the top level, matching where the live
+    object carries it. ``address2`` is preserve-on-omit: written only when the caller
+    supplies the key (pass ``""`` to clear); omit it to keep any existing suite line.
+
+    Faithful to the captured browser request, which PUTs the whole object and
+    changes only the nested ``address``. The credit-card object carries no PAN/CVC,
+    so a full round-trip leaks nothing. Note: a full-object PUT is last-writer-wins
+    for the entire object — a concurrent edit to any field would be reverted.
+
+    Safety gate: the PUT echoes back every field we read, so a partial/list-item GET
+    would blank real fields on the parent card (which backs child virtual cards). We
+    require *positive* evidence of a full object — a nested ``address`` mapping, which
+    every full credit-card object carries (per the capture) and the thin list-item
+    shape (``id/last4/status/displayName``) never does. A denylist of the exact thin
+    keyset would let a "thin + one stray key" response slip through and corrupt the
+    card; requiring ``address`` fails safe instead.
+
+    Raises:
+        PayWithExtendError: if the GET does not return a full card object (no nested
+            ``address`` mapping), which would make the round-trip unsafe.
+    """
+    resp = fetcher()
+    raw = resp.get("creditCard", resp) if isinstance(resp, dict) else None
+    if not isinstance(raw, dict) or "id" not in raw:
+        raise PayWithExtendError("unexpected update_credit_card GET response: not a card object")
+    if not isinstance(raw.get("address"), dict):
+        raise PayWithExtendError(
+            f"GET /creditcards/{credit_card_id} did not return a full card object "
+            "(no nested `address`); aborting to avoid blanking the parent card"
+        )
+
+    body = dict(raw)
+    new_address = dict(body["address"])  # merge over existing so unknown keys survive
+    for field in _CREDIT_CARD_ADDRESS_REQUIRED:
+        new_address[field] = address[field]
+    if "address2" in address:
+        new_address["address2"] = address["address2"] or ""
+    if country is not None:
+        new_address["country"] = country
+        body["country"] = country
+    body["address"] = new_address
+
+    return {
+        "method": "PUT",
+        "path": f"/creditcards/{credit_card_id}",
+        "body": body,
+        "preview_accuracy": "exact",
+    }
+
+
+def update_credit_card_address(
+    credit_card_id: str,
+    address: dict[str, Any],
+    *,
+    country: str | None = None,
+    client: Any = None,
+) -> CreditCard:
+    """Update a parent (SOURCE) credit card's billing address. PUT /creditcards/{id}.
+
+    Full-object read-modify-write: GET the card, override only the nested ``address``
+    object (merged, so unknown keys survive), round-trip every other field unchanged,
+    PUT it back. ``address`` requires ``address1``, ``city``, ``province``, ``postal``.
+    ``address2`` is optional and preserve-on-omit: omit the key to keep any existing
+    suite/apt line, or pass ``address2=""`` to clear it. ``postal`` must stay a string
+    so leading-zero ZIPs survive.
+
+    AVS caveat: this updates the *stored* address. Whether that address reaches the
+    issuer's address-verification check at checkout is unverified — confirm against a
+    live transaction before relying on it for AVS.
+
+    Raises:
+        ValueError: if a required address field is missing (before any network call).
+        PayWithExtendError: if the GET returns a thin/unrecognizable object.
+    """
+    _require_address_fields(address)
+
+    c = client or _default_client()
+    operation = build_update_credit_card_address_operation(
+        credit_card_id,
+        address,
+        country,
+        fetcher=lambda: c.get(f"/creditcards/{credit_card_id}"),
+    )
+    payload = operation["body"]
+    # If the live PUT returns 200 with an unexpected/thin body, fall back to the card
+    # we just round-tripped — the GET body (``payload``) carries id/last4/status/
+    # displayName, and the address change does not alter status. This keeps a
+    # SUCCESSFUL update from raising and leaving a dangling pending ledger row.
+    # Mirrors enroll_credit_card's step-2 fallback.
+    fallback = _parse_credit_card(payload, "update_credit_card_address GET body")
+
+    def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
+        credit_card = _parse_credit_card(
+            resp,
+            "update_credit_card_address response",
+            fallback=fallback,
+            fallback_status=fallback.status,
+        )
+        return credit_card, {"credit_card_id": credit_card.id}
+
+    key = f"update-cc:{credit_card_id}"
+    return _ledger_flow(
+        "update-cc",
+        key,
+        lambda: c.put(f"/creditcards/{credit_card_id}", json_body=payload),
+        on_success=_on_success,
+    )
+
+
 def _update_overrides(
     *,
     balance_cents: int | None,
