@@ -676,9 +676,25 @@ def update_credit_card_address(
         fetcher=lambda: c.get(f"/creditcards/{credit_card_id}"),
     )
     payload = operation["body"]
+    # If the live PUT returns 200 with an unexpected/thin body, fall back to the card
+    # we just round-tripped — the GET body (``payload``) carries id/last4/status/
+    # displayName, and the address change does not alter status. This keeps a
+    # SUCCESSFUL update from raising and leaving a dangling pending ledger row.
+    # Mirrors enroll_credit_card's step-2 fallback.
+    fallback = CreditCard(
+        id=payload["id"],
+        last4=payload["last4"],
+        status=CardStatus(payload["status"]),
+        display_name=payload["displayName"],
+    )
 
     def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
-        credit_card = _parse_credit_card(resp, "update_credit_card_address response")
+        credit_card = _parse_credit_card(
+            resp,
+            "update_credit_card_address response",
+            fallback=fallback,
+            fallback_status=fallback.status,
+        )
         return credit_card, {"credit_card_id": credit_card.id}
 
     key = f"update-cc:{credit_card_id}"

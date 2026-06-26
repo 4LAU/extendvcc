@@ -1463,6 +1463,37 @@ def test_update_credit_card_address_4xx_marks_failed(monkeypatch, tmp_path):
     configure_paths()
 
 
+def test_update_credit_card_address_odd_success_body_still_confirms(monkeypatch, tmp_path):
+    """A 200 PUT with an unrecognizable body must NOT leave a dangling pending row.
+
+    The server already applied the change, so we fall back to the round-tripped card
+    (from the GET body) and confirm the ledger row instead of raising.
+    """
+    import json as _json
+
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": {"ok": True}},  # odd body, no card fields
+    )
+    result = cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake,
+    )
+    # Fallback card built from the GET body, not the odd PUT response.
+    assert result.id == "cc_synth1"
+    assert result.last4 == "1040"
+    assert result.status == cards.CardStatus.ACTIVE
+
+    assert ledger.find_pending("update-cc:cc_synth1") is None  # not dangling
+    rows = [_json.loads(line) for line in (tmp_path / "cards.jsonl").read_text().splitlines() if line.strip()]
+    ops = [r for r in rows if r.get("correlation_key") == "update-cc:cc_synth1"]
+    assert len(ops) == 1
+    assert ops[0]["status"] == "confirmed"
+    configure_paths()
+
+
 def test_update_credit_card_address_is_public():
     import extendvcc
 
