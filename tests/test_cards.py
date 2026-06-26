@@ -1463,6 +1463,42 @@ def test_update_credit_card_address_4xx_marks_failed(monkeypatch, tmp_path):
     configure_paths()
 
 
+def test_update_credit_card_address_omitting_address2_preserves_existing(monkeypatch, tmp_path):
+    """Omitting address2 keeps the card's existing suite line (no silent blanking)."""
+    _patch_ledger(monkeypatch, tmp_path)
+    raw = {**_RAW_CREDIT_CARD, "address": {**_RAW_CREDIT_CARD["address"], "address2": "Apt 5"}}
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": raw}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake,
+    )
+    _, body = fake.put_calls[0]
+    assert body["address"]["address2"] == "Apt 5"  # preserved, not blanked
+    configure_paths()
+
+
+def test_update_credit_card_address_explicit_empty_address2_clears(monkeypatch, tmp_path):
+    """Passing address2='' explicitly clears an existing suite line."""
+    _patch_ledger(monkeypatch, tmp_path)
+    raw = {**_RAW_CREDIT_CARD, "address": {**_RAW_CREDIT_CARD["address"], "address2": "Apt 5"}}
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": raw}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "address2": "", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake,
+    )
+    _, body = fake.put_calls[0]
+    assert body["address"]["address2"] == ""  # explicitly cleared
+    configure_paths()
+
+
 def test_update_credit_card_address_odd_success_body_still_confirms(monkeypatch, tmp_path):
     """A 200 PUT with an unrecognizable body must NOT leave a dangling pending row.
 

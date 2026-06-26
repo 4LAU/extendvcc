@@ -507,15 +507,51 @@ def test_update_account_yes_skips_prompt(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert code == 0
     assert seen["card_id"] == "cc_1"
+    # --address2 not passed -> omitted from the dict (preserve-on-omit).
     assert seen["address"] == {
         "address1": "1 New Rd",
-        "address2": "",
         "city": "Newtown",
         "province": "CA",
         "postal": "02134",
     }
     assert seen["country"] == "US"
     assert "Updated: cc_1" in captured.out
+
+
+def test_update_account_address2_preserve_and_clear(monkeypatch):
+    """--address2 omitted -> key absent (preserve); --address2 '' -> key present (clear)."""
+    seen = {}
+
+    def _fake_update(card_id, address, *, country=None):
+        seen["address"] = dict(address)
+        from extendvcc.models import CardStatus, CreditCard
+
+        return CreditCard(id=card_id, last4="1040", status=CardStatus.ACTIVE, display_name="Parent")
+
+    monkeypatch.setattr("extendvcc.cards.update_credit_card_address", _fake_update)
+
+    base = [
+        "update-account",
+        "cc_1",
+        "--address1",
+        "1 New Rd",
+        "--city",
+        "Newtown",
+        "--province",
+        "CA",
+        "--postal",
+        "95051",
+        "--yes",
+    ]
+
+    assert main(base) == 0
+    assert "address2" not in seen["address"]  # omitted -> preserved downstream
+
+    assert main([*base, "--address2", ""]) == 0
+    assert seen["address"]["address2"] == ""  # explicit clear
+
+    assert main([*base, "--address2", "Apt 9"]) == 0
+    assert seen["address"]["address2"] == "Apt 9"
 
 
 def test_update_account_empty_address_rejected_in_dry_run(monkeypatch):

@@ -558,11 +558,15 @@ def _cmd_update_account(args: argparse.Namespace) -> int:
 
     address = {
         "address1": args.address1,
-        "address2": getattr(args, "address2", "") or "",
         "city": args.city,
         "province": args.province,
         "postal": args.postal,
     }
+    # Preserve-on-omit: only send address2 when the user passed --address2 (default
+    # None), so updating other fields keeps an existing suite/apt line. Pass
+    # --address2 "" to explicitly clear it.
+    if getattr(args, "address2", None) is not None:
+        address["address2"] = args.address2
     country = getattr(args, "country", None)
 
     # Validate up front so a --dry-run preview enforces the same contract as a real
@@ -836,7 +840,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("update-account", help="Update a parent credit card's billing address")
     p.add_argument("id", help="Credit card ID (cc_...)")
     p.add_argument("--address1", required=True, help="Billing address line 1")
-    p.add_argument("--address2", default="", help="Billing address line 2")
+    p.add_argument(
+        "--address2",
+        default=None,
+        help="Billing address line 2 (omit to keep the existing value; pass '' to clear)",
+    )
     p.add_argument("--city", required=True, help="Billing city")
     p.add_argument("--province", required=True, help="Billing state/province")
     p.add_argument("--postal", required=True, help="Billing postal/ZIP code (string; leading zeros kept)")

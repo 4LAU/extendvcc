@@ -628,14 +628,19 @@ def _credit_card_address_overrides(address: dict[str, Any], country: str | None)
     Returns a nested ``address`` override (merged over the GET's address by the
     builder). When ``country`` is given it is set both inside the nested address
     and at the top level, matching where the live object carries it.
+
+    ``address2`` is preserve-on-omit: it is written only when the caller supplies
+    the key, so updating other fields without it keeps any existing suite/apt line
+    (the builder's merge preserves it). Pass ``address2=""`` explicitly to clear it.
     """
     new_address: dict[str, Any] = {
         "address1": address["address1"],
-        "address2": address.get("address2", "") or "",
         "city": address["city"],
         "province": address["province"],
         "postal": address["postal"],
     }
+    if "address2" in address:
+        new_address["address2"] = address["address2"] or ""
     overrides: dict[str, Any] = {"address": new_address}
     if country is not None:
         new_address["country"] = country
@@ -654,9 +659,10 @@ def update_credit_card_address(
 
     Full-object read-modify-write: GET the card, override only the nested ``address``
     object (merged, so unknown keys survive), round-trip every other field unchanged,
-    PUT it back. ``address`` requires ``address1``, ``city``, ``province``, ``postal``
-    and accepts an optional ``address2`` (defaults ``""``). ``postal`` must stay a
-    string so leading-zero ZIPs survive.
+    PUT it back. ``address`` requires ``address1``, ``city``, ``province``, ``postal``.
+    ``address2`` is optional and preserve-on-omit: omit the key to keep any existing
+    suite/apt line, or pass ``address2=""`` to clear it. ``postal`` must stay a string
+    so leading-zero ZIPs survive.
 
     AVS caveat: this updates the *stored* address. Whether that address reaches the
     issuer's address-verification check at checkout is unverified — confirm against a
