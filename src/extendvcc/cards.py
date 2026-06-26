@@ -551,6 +551,60 @@ def build_update_card_operation(
     }
 
 
+# A GET /creditcards/{id} that returns only these keys is the "thin" list-item
+# shape, not the full card object. Round-tripping it as a PUT body would blank
+# every other field on the parent card, so we refuse it.
+_THIN_CREDIT_CARD_KEYS = frozenset({"id", "last4", "status", "displayName"})
+
+
+def build_update_credit_card_operation(
+    credit_card_id: str,
+    overrides: dict[str, Any],
+    *,
+    fetcher: Callable[[], Any],
+) -> dict[str, Any]:
+    """Shape a ``PUT /creditcards/{id}`` operation via full-object read-modify-write.
+
+    ``fetcher`` performs the read-only GET of the current card. Its result (wrapped
+    in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, then
+    ``overrides`` are applied: a dict-valued override is **merged** one level deep
+    into the existing field (so the nested ``address`` keeps unknown keys like
+    ``countryCode``); any other value replaces.
+
+    Faithful to the captured browser request, which PUTs the whole object and
+    changes only the nested ``address``. The credit-card object carries no PAN/CVC,
+    so a full round-trip leaks nothing. Note: a full-object PUT is last-writer-wins
+    for the entire object — a concurrent edit to any field would be reverted.
+
+    Raises:
+        PayWithExtendError: if the GET returns the thin list-item shape (which would
+            make the round-trip unsafe) or an otherwise unrecognizable object.
+    """
+    resp = fetcher()
+    raw = resp.get("creditCard", resp) if isinstance(resp, dict) else None
+    if not isinstance(raw, dict) or "id" not in raw:
+        raise PayWithExtendError("unexpected update_credit_card GET response: not a card object")
+    if set(raw.keys()) <= _THIN_CREDIT_CARD_KEYS:
+        raise PayWithExtendError(
+            f"GET /creditcards/{credit_card_id} returned a thin object; "
+            "full-object round-trip is unsafe — aborting to avoid blanking the parent card"
+        )
+
+    body = dict(raw)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(body.get(key), dict):
+            body[key] = {**body[key], **value}
+        else:
+            body[key] = value
+
+    return {
+        "method": "PUT",
+        "path": f"/creditcards/{credit_card_id}",
+        "body": body,
+        "preview_accuracy": "exact",
+    }
+
+
 def _update_overrides(
     *,
     balance_cents: int | None,

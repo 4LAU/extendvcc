@@ -8,7 +8,7 @@ import pytest
 
 from extendvcc import cards, ledger
 from extendvcc._paths import configure as configure_paths
-from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled
+from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
 
 _BASE_SESSION = {
     "email": "user@example.com",
@@ -1229,6 +1229,80 @@ def test_build_update_card_operation_allowlist_projection():
     assert body["currency"] == "USD"  # allowlist field preserved
     assert op["method"] == "PUT"
     assert op["path"] == "/virtualcards/vc_b"
+
+
+# Synthetic full credit-card GET object. Flat top-level address fields are
+# intentionally STALE relative to the nested `address` object, mirroring the
+# real capture. `countryCode` is an unknown nested key used to prove merge.
+_RAW_CREDIT_CARD = {
+    "id": "cc_synth1",
+    "last4": "1040",
+    "status": "ACTIVE",
+    "displayName": "Parent Card",
+    "issuedAmountCents": 150300,
+    "issuerId": "ii_x",
+    "type": "SOURCE",
+    "country": "US",
+    "address1": "400 Old St",
+    "address2": "",
+    "city": "Oldtown",
+    "province": "NY",
+    "postal": "10001",
+    "address": {
+        "address1": "400 Old St",
+        "address2": "",
+        "city": "Oldtown",
+        "country": "US",
+        "province": "NY",
+        "postal": "10001",
+        "countryCode": "840",
+    },
+}
+_CC_PUT_RESP = {"creditCard": {"id": "cc_synth1", "last4": "1040", "status": "ACTIVE", "displayName": "Parent Card"}}
+
+
+def test_build_update_credit_card_merges_nested_address():
+    """Override merges into the nested `address`; unknown nested keys survive."""
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
+    op = cards.build_update_credit_card_operation(
+        "cc_synth1",
+        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        fetcher=lambda: fake.get("/creditcards/cc_synth1"),
+    )
+    body = op["body"]
+    assert op["method"] == "PUT"
+    assert op["path"] == "/creditcards/cc_synth1"
+    assert body["address"]["address1"] == "1 New Rd"
+    assert body["address"]["city"] == "Newtown"
+    # merge, not replace: the unknown nested key is preserved.
+    assert body["address"]["countryCode"] == "840"
+
+
+def test_build_update_credit_card_leaves_flat_and_other_fields_untouched():
+    """Flat address fields stay stale; non-address fields round-trip unchanged."""
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
+    op = cards.build_update_credit_card_operation(
+        "cc_synth1",
+        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        fetcher=lambda: fake.get("/creditcards/cc_synth1"),
+    )
+    body = op["body"]
+    # Flat top-level fields are NOT mirrored — still stale, as the browser left them.
+    assert body["address1"] == "400 Old St"
+    assert body["city"] == "Oldtown"
+    # Unrelated field preserved verbatim.
+    assert body["issuedAmountCents"] == 150300
+    assert body["type"] == "SOURCE"
+
+
+def test_build_update_credit_card_rejects_thin_get():
+    """A thin GET (list-item shape) must raise, not silently blank the parent card."""
+    thin = {"id": "cc_thin", "last4": "1", "status": "ACTIVE", "displayName": "x"}
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_thin": {"creditCard": thin}})
+    with pytest.raises(PayWithExtendError):
+        cards.build_update_credit_card_operation(
+            "cc_thin", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_thin")
+        )
 
 
 # ---------------------------------------------------------------------------
