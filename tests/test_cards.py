@@ -1448,6 +1448,12 @@ def test_update_credit_card_address_4xx_marks_failed(monkeypatch, tmp_path):
     configure_paths()
 
 
+def test_update_credit_card_address_is_public():
+    import extendvcc
+
+    assert hasattr(extendvcc, "update_credit_card_address")
+
+
 # ---------------------------------------------------------------------------
 # create_card — recurring cards
 # ---------------------------------------------------------------------------
