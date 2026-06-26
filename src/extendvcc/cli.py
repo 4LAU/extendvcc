@@ -554,7 +554,7 @@ def _update_dry_run(args: argparse.Namespace, kwargs: dict[str, Any]) -> int:
 
 
 def _cmd_update_account(args: argparse.Namespace) -> int:
-    from .cards import _require_address_fields, update_credit_card_address
+    from .cards import update_credit_card_address
 
     address = {
         "address1": args.address1,
@@ -568,10 +568,6 @@ def _cmd_update_account(args: argparse.Namespace) -> int:
     if getattr(args, "address2", None) is not None:
         address["address2"] = args.address2
     country = getattr(args, "country", None)
-
-    # Validate up front so a --dry-run preview enforces the same contract as a real
-    # run (the library path validates too; this covers the dry-run branch below).
-    _require_address_fields(address)
 
     if getattr(args, "dry_run", False):
         return _update_account_dry_run(args, address, country)
@@ -593,16 +589,23 @@ def _cmd_update_account(args: argparse.Namespace) -> int:
 def _update_account_dry_run(args: argparse.Namespace, address: dict[str, Any], country: str | None) -> int:
     """Preview an address update. The read-only GET is allowed (non-destructive) so
     the merged PUT body is accurate; no mutation is performed."""
-    from .cards import _credit_card_address_overrides, _default_client, build_update_credit_card_operation
+    from .cards import (
+        _default_client,
+        _require_address_fields,
+        build_update_credit_card_address_operation,
+    )
 
+    # Enforce the same contract a real run would (argparse guarantees presence, not
+    # non-emptiness); the real path validates inside update_credit_card_address.
+    _require_address_fields(address)
     client = _default_client()
-    overrides = _credit_card_address_overrides(address, country)
-    operation = build_update_credit_card_operation(
+    operation = build_update_credit_card_address_operation(
         args.id,
-        overrides,
+        address,
+        country,
         fetcher=lambda: client.get(f"/creditcards/{args.id}"),
     )
-    _info(f"[dry-run] update-account {args.id} — overrides: {overrides}. No mutation made.")
+    _info(f"[dry-run] update-account {args.id} — no mutation made.")
     print(_json_out(operation["body"]))
     return EXIT_OK
 

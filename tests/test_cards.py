@@ -1264,9 +1264,10 @@ _CC_PUT_RESP = {"creditCard": {"id": "cc_synth1", "last4": "1040", "status": "AC
 def test_build_update_credit_card_merges_nested_address():
     """Override merges into the nested `address`; unknown nested keys survive."""
     fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
-    op = cards.build_update_credit_card_operation(
+    op = cards.build_update_credit_card_address_operation(
         "cc_synth1",
-        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        None,
         fetcher=lambda: fake.get("/creditcards/cc_synth1"),
     )
     body = op["body"]
@@ -1281,9 +1282,10 @@ def test_build_update_credit_card_merges_nested_address():
 def test_build_update_credit_card_leaves_flat_and_other_fields_untouched():
     """Flat address fields stay stale; non-address fields round-trip unchanged."""
     fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
-    op = cards.build_update_credit_card_operation(
+    op = cards.build_update_credit_card_address_operation(
         "cc_synth1",
-        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        None,
         fetcher=lambda: fake.get("/creditcards/cc_synth1"),
     )
     body = op["body"]
@@ -1300,8 +1302,8 @@ def test_build_update_credit_card_rejects_thin_get():
     thin = {"id": "cc_thin", "last4": "1", "status": "ACTIVE", "displayName": "x"}
     fake = _MutatingFakeClient(get_responses={"/creditcards/cc_thin": {"creditCard": thin}})
     with pytest.raises(PayWithExtendError):
-        cards.build_update_credit_card_operation(
-            "cc_thin", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_thin")
+        cards.build_update_credit_card_address_operation(
+            "cc_thin", {"address1": "y"}, None, fetcher=lambda: fake.get("/creditcards/cc_thin")
         )
 
 
@@ -1315,8 +1317,8 @@ def test_build_update_credit_card_rejects_thin_plus_extra_key():
     almost = {"id": "cc_x", "last4": "1", "status": "ACTIVE", "displayName": "x", "type": "SOURCE"}
     fake = _MutatingFakeClient(get_responses={"/creditcards/cc_x": {"creditCard": almost}})
     with pytest.raises(PayWithExtendError, match="full card object"):
-        cards.build_update_credit_card_operation(
-            "cc_x", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_x")
+        cards.build_update_credit_card_address_operation(
+            "cc_x", {"address1": "y"}, None, fetcher=lambda: fake.get("/creditcards/cc_x")
         )
 
 

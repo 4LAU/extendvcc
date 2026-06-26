@@ -551,19 +551,37 @@ def build_update_card_operation(
     }
 
 
-def build_update_credit_card_operation(
+_CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
+
+
+def _require_address_fields(address: dict[str, Any]) -> None:
+    """Raise ValueError naming any missing or empty required billing-address field.
+
+    Shared by the library path and the CLI dry-run so a preview enforces the same
+    contract as a real run (argparse ``required=True`` guarantees presence, not
+    non-emptiness — ``--address1 ""`` must still be rejected).
+    """
+    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
+    if missing:
+        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
+
+
+def build_update_credit_card_address_operation(
     credit_card_id: str,
-    overrides: dict[str, Any],
+    address: dict[str, Any],
+    country: str | None,
     *,
     fetcher: Callable[[], Any],
 ) -> dict[str, Any]:
-    """Shape a ``PUT /creditcards/{id}`` operation via full-object read-modify-write.
+    """Shape a ``PUT /creditcards/{id}`` address change via full-object read-modify-write.
 
     ``fetcher`` performs the read-only GET of the current card. Its result (wrapped
-    in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, then
-    ``overrides`` are applied: a dict-valued override is **merged** one level deep
-    into the existing field (so the nested ``address`` keeps unknown keys like
-    ``countryCode``); any other value replaces.
+    in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, with
+    the new ``address`` merged one level deep into the existing nested ``address`` —
+    so unknown keys like ``countryCode`` survive. ``country``, when given, is set
+    both inside the nested address and at the top level, matching where the live
+    object carries it. ``address2`` is preserve-on-omit: written only when the caller
+    supplies the key (pass ``""`` to clear); omit it to keep any existing suite line.
 
     Faithful to the captured browser request, which PUTs the whole object and
     changes only the nested ``address``. The credit-card object carries no PAN/CVC,
@@ -593,11 +611,15 @@ def build_update_credit_card_operation(
         )
 
     body = dict(raw)
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(body.get(key), dict):
-            body[key] = {**body[key], **value}
-        else:
-            body[key] = value
+    new_address = dict(body["address"])  # merge over existing so unknown keys survive
+    for field in _CREDIT_CARD_ADDRESS_REQUIRED:
+        new_address[field] = address[field]
+    if "address2" in address:
+        new_address["address2"] = address["address2"] or ""
+    if country is not None:
+        new_address["country"] = country
+        body["country"] = country
+    body["address"] = new_address
 
     return {
         "method": "PUT",
@@ -605,47 +627,6 @@ def build_update_credit_card_operation(
         "body": body,
         "preview_accuracy": "exact",
     }
-
-
-_CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
-
-
-def _require_address_fields(address: dict[str, Any]) -> None:
-    """Raise ValueError naming any missing or empty required billing-address field.
-
-    Shared by the library path and the CLI dry-run so a preview enforces the same
-    contract as a real run (argparse ``required=True`` guarantees presence, not
-    non-emptiness — ``--address1 ""`` must still be rejected).
-    """
-    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
-    if missing:
-        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
-
-
-def _credit_card_address_overrides(address: dict[str, Any], country: str | None) -> dict[str, Any]:
-    """Build the PUT overrides for an address change (shared by lib + CLI dry-run).
-
-    Returns a nested ``address`` override (merged over the GET's address by the
-    builder). When ``country`` is given it is set both inside the nested address
-    and at the top level, matching where the live object carries it.
-
-    ``address2`` is preserve-on-omit: it is written only when the caller supplies
-    the key, so updating other fields without it keeps any existing suite/apt line
-    (the builder's merge preserves it). Pass ``address2=""`` explicitly to clear it.
-    """
-    new_address: dict[str, Any] = {
-        "address1": address["address1"],
-        "city": address["city"],
-        "province": address["province"],
-        "postal": address["postal"],
-    }
-    if "address2" in address:
-        new_address["address2"] = address["address2"] or ""
-    overrides: dict[str, Any] = {"address": new_address}
-    if country is not None:
-        new_address["country"] = country
-        overrides["country"] = country
-    return overrides
 
 
 def update_credit_card_address(
@@ -675,10 +656,10 @@ def update_credit_card_address(
     _require_address_fields(address)
 
     c = client or _default_client()
-    overrides = _credit_card_address_overrides(address, country)
-    operation = build_update_credit_card_operation(
+    operation = build_update_credit_card_address_operation(
         credit_card_id,
-        overrides,
+        address,
+        country,
         fetcher=lambda: c.get(f"/creditcards/{credit_card_id}"),
     )
     payload = operation["body"]
@@ -687,12 +668,7 @@ def update_credit_card_address(
     # displayName, and the address change does not alter status. This keeps a
     # SUCCESSFUL update from raising and leaving a dangling pending ledger row.
     # Mirrors enroll_credit_card's step-2 fallback.
-    fallback = CreditCard(
-        id=payload["id"],
-        last4=payload["last4"],
-        status=CardStatus(payload["status"]),
-        display_name=payload["displayName"],
-    )
+    fallback = _parse_credit_card(payload, "update_credit_card_address GET body")
 
     def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
         credit_card = _parse_credit_card(
