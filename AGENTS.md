@@ -6,7 +6,7 @@ Tool-agnostic guide for AI agents and human contributors. For Claude Code specif
 
 ## Project Overview
 
-`extendvcc` is an unofficial Python client and CLI for Extend's private virtual card API (`api.paywithextend.com`). It handles Cognito SRP authentication with device remembering and email OTP, the full virtual-card lifecycle (create, list, update, cancel, close, reveal), parent credit-card enrollment, and a JSONL audit ledger for all card mutations. HTTP uses `impit` for Chrome TLS fingerprinting, which is necessary because Extend blocks non-browser TLS profiles.
+`extendvcc` is an unofficial Python client and CLI for Extend's private virtual card API (`api.paywithextend.com`). It handles Cognito SRP authentication with device remembering and email OTP, the full virtual-card lifecycle (create, list, update, cancel, close, reveal), parent credit-card enrollment and billing-address updates, and a JSONL audit ledger for all card mutations. HTTP uses `impit` for Chrome TLS fingerprinting, which is necessary because Extend blocks non-browser TLS profiles.
 
 ---
 

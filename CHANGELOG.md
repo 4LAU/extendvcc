@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- `update-account` changes the stored billing address on a parent (SOURCE) credit card, with a matching `update_credit_card_address()` in the public API. It runs a full read-modify-write: GET the card, merge the new address into the existing object so unknown fields survive, then PUT the whole object back. `--dry-run` prints the exact request body from a read-only GET without mutating. `--address2` is preserve-on-omit (pass `""` to clear it), and an omitted `--country` keeps the card's current value. A safety check refuses to PUT when the GET returns a thin list-item shape, which would otherwise blank the parent card that backs your virtual cards. This updates the stored address only; whether it reaches the issuer's address check (AVS) at checkout is unverified.
+
 ---
 
 ## [0.2.0] - 2026-06-18
