@@ -302,7 +302,15 @@ def test_update_credit_card_address_missing_field_raises(monkeypatch, tmp_path):
 
 
 def test_update_credit_card_address_ledger_confirmed(monkeypatch, tmp_path):
-    """A successful update resolves the update-cc:{id} pending row to confirmed."""
+    """A successful update writes a pending row and resolves it to confirmed.
+
+    Asserting only `find_pending is None` is too weak — it also passes if
+    record_pending never ran. Read the raw ledger file and prove a confirmed
+    operation row for this key exists (credit-card updates write no card row, so
+    we cannot lean on ledger.query()).
+    """
+    import json as _json
+
     _patch_ledger(monkeypatch, tmp_path)
     fake = _MutatingFakeClient(
         get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
@@ -313,7 +321,18 @@ def test_update_credit_card_address_ledger_confirmed(monkeypatch, tmp_path):
         {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
         client=fake,
     )
-    assert ledger.find_pending("update-cc:cc_synth1") is None  # resolved, not pending
+    assert ledger.find_pending("update-cc:cc_synth1") is None  # no longer pending
+
+    rows = [_json.loads(line) for line in (tmp_path / "cards.jsonl").read_text().splitlines() if line.strip()]
+    ops = [
+        r
+        for r in rows
+        if r.get("record_type") == "operation"
+        and r.get("correlation_key") == "update-cc:cc_synth1"
+        and r.get("intent") == "update-cc"
+    ]
+    assert len(ops) == 1
+    assert ops[0]["status"] == "confirmed"
     configure_paths()
 
 
@@ -354,6 +373,18 @@ In `src/extendvcc/cards.py`, add after the Task 1 builder:
 
 ```python
 _CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
+
+
+def _require_address_fields(address: dict[str, Any]) -> None:
+    """Raise ValueError naming any missing or empty required billing-address field.
+
+    Shared by the library path and the CLI dry-run so a preview enforces the same
+    contract as a real run (argparse ``required=True`` guarantees presence, not
+    non-emptiness — ``--address1 ""`` must still be rejected).
+    """
+    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
+    if missing:
+        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
 
 
 def _credit_card_address_overrides(address: dict[str, Any], country: str | None) -> dict[str, Any]:
@@ -400,9 +431,7 @@ def update_credit_card_address(
         ValueError: if a required address field is missing (before any network call).
         PayWithExtendError: if the GET returns a thin/unrecognizable object.
     """
-    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
-    if missing:
-        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
+    _require_address_fields(address)
 
     c = client or _default_client()
     overrides = _credit_card_address_overrides(address, country)
@@ -585,6 +614,20 @@ def test_update_account_yes_skips_prompt(monkeypatch, capsys):
     }
     assert seen["country"] == "US"
     assert "Updated: cc_1" in captured.out
+
+
+def test_update_account_empty_address_rejected_in_dry_run(monkeypatch):
+    """An empty required field is rejected even in --dry-run (no GET attempted)."""
+    monkeypatch.setattr("extendvcc.cards._default_client", _bang)  # GET must NOT be reached
+
+    code = main(
+        [
+            "update-account", "cc_1",
+            "--address1", "", "--city", "Newtown",
+            "--province", "CA", "--postal", "95051", "--dry-run",
+        ]
+    )
+    assert code == 1  # library ValueError -> EXIT_ERROR
 ```
 
 Confirm `_bang` exists in `tests/test_cli.py` (used by `test_update_dry_run_no_put` at line 361). If `_bang` is a no-arg raiser, the `builtins.input` patch above is correct.
@@ -600,7 +643,7 @@ In `src/extendvcc/cli.py`, add after `_update_dry_run` (~line 553):
 
 ```python
 def _cmd_update_account(args: argparse.Namespace) -> int:
-    from .cards import update_credit_card_address
+    from .cards import _require_address_fields, update_credit_card_address
 
     address = {
         "address1": args.address1,
@@ -610,6 +653,10 @@ def _cmd_update_account(args: argparse.Namespace) -> int:
         "postal": args.postal,
     }
     country = getattr(args, "country", None)
+
+    # Validate up front so a --dry-run preview enforces the same contract as a real
+    # run (the library path validates too; this covers the dry-run branch below).
+    _require_address_fields(address)
 
     if getattr(args, "dry_run", False):
         return _update_account_dry_run(args, address, country)
@@ -670,7 +717,7 @@ In `_COMMANDS`, add the entry (after `"update": _cmd_update,`):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_cli.py -k "update_account" -v`
-Expected: PASS (2 tests)
+Expected: PASS (3 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -790,6 +837,13 @@ git commit -m "style: ruff format"
       is a full card object with the nested `address` overridden, the design holds. If it
       is thin (only id/last4/status/displayName) or the command raises the thin-GET error,
       **stop and report** — the round-trip approach needs revisiting before any live PUT.
+- [ ] **Eyeball the live PUT response shape.** `_on_success` parses the PUT response
+      via `_parse_credit_card` with no `fallback`. If the live `PUT /creditcards/{id}`
+      returns an unrecognized/empty body, it would raise *after* the server already
+      applied the change — leaving the pending row dangling. On the first real run,
+      confirm the PUT returns a full card object (wrapped in `creditCard` or bare). If
+      it returns something thin/empty, add a `fallback=`/`fallback_status=` to
+      `_on_success` mirroring `enroll_credit_card`'s step-2 (cards.py:748).
 - [ ] **Confirm AVS behavior live (optional but recommended).** After a real
       `update-account`, run a small test charge to confirm the new address actually
       satisfies address verification. The library cannot verify this offline.
