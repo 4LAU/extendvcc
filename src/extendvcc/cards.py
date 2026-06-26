@@ -605,6 +605,89 @@ def build_update_credit_card_operation(
     }
 
 
+_CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
+
+
+def _require_address_fields(address: dict[str, Any]) -> None:
+    """Raise ValueError naming any missing or empty required billing-address field.
+
+    Shared by the library path and the CLI dry-run so a preview enforces the same
+    contract as a real run (argparse ``required=True`` guarantees presence, not
+    non-emptiness — ``--address1 ""`` must still be rejected).
+    """
+    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
+    if missing:
+        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
+
+
+def _credit_card_address_overrides(address: dict[str, Any], country: str | None) -> dict[str, Any]:
+    """Build the PUT overrides for an address change (shared by lib + CLI dry-run).
+
+    Returns a nested ``address`` override (merged over the GET's address by the
+    builder). When ``country`` is given it is set both inside the nested address
+    and at the top level, matching where the live object carries it.
+    """
+    new_address: dict[str, Any] = {
+        "address1": address["address1"],
+        "address2": address.get("address2", "") or "",
+        "city": address["city"],
+        "province": address["province"],
+        "postal": address["postal"],
+    }
+    overrides: dict[str, Any] = {"address": new_address}
+    if country is not None:
+        new_address["country"] = country
+        overrides["country"] = country
+    return overrides
+
+
+def update_credit_card_address(
+    credit_card_id: str,
+    address: dict[str, Any],
+    *,
+    country: str | None = None,
+    client: Any = None,
+) -> CreditCard:
+    """Update a parent (SOURCE) credit card's billing address. PUT /creditcards/{id}.
+
+    Full-object read-modify-write: GET the card, override only the nested ``address``
+    object (merged, so unknown keys survive), round-trip every other field unchanged,
+    PUT it back. ``address`` requires ``address1``, ``city``, ``province``, ``postal``
+    and accepts an optional ``address2`` (defaults ``""``). ``postal`` must stay a
+    string so leading-zero ZIPs survive.
+
+    AVS caveat: this updates the *stored* address. Whether that address reaches the
+    issuer's address-verification check at checkout is unverified — confirm against a
+    live transaction before relying on it for AVS.
+
+    Raises:
+        ValueError: if a required address field is missing (before any network call).
+        PayWithExtendError: if the GET returns a thin/unrecognizable object.
+    """
+    _require_address_fields(address)
+
+    c = client or _default_client()
+    overrides = _credit_card_address_overrides(address, country)
+    operation = build_update_credit_card_operation(
+        credit_card_id,
+        overrides,
+        fetcher=lambda: c.get(f"/creditcards/{credit_card_id}"),
+    )
+    payload = operation["body"]
+
+    def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
+        credit_card = _parse_credit_card(resp, "update_credit_card_address response")
+        return credit_card, {"credit_card_id": credit_card.id}
+
+    key = f"update-cc:{credit_card_id}"
+    return _ledger_flow(
+        "update-cc",
+        key,
+        lambda: c.put(f"/creditcards/{credit_card_id}", json_body=payload),
+        on_success=_on_success,
+    )
+
+
 def _update_overrides(
     *,
     balance_cents: int | None,
