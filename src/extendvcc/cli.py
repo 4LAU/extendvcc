@@ -840,7 +840,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--city", required=True, help="Billing city")
     p.add_argument("--province", required=True, help="Billing state/province")
     p.add_argument("--postal", required=True, help="Billing postal/ZIP code (string; leading zeros kept)")
-    p.add_argument("--country", default=None, help="Country code (defaults to the card's current value)")
+    p.add_argument(
+        "--country",
+        default=None,
+        help="Country code (defaults to the card's current value; cross-country changes are "
+        "unverified — the nested countryCode is left as-is)",
+    )
     p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="Preview the merged PUT body (read-only GET, no mutation)")
 

@@ -538,3 +538,27 @@ def test_update_account_empty_address_rejected_in_dry_run(monkeypatch):
         ]
     )
     assert code == 1  # library ValueError -> EXIT_ERROR
+
+
+def test_update_account_decline_aborts_without_mutating(monkeypatch, capsys):
+    """Answering 'n' at the prompt aborts with EXIT_ERROR and never calls the mutator."""
+    monkeypatch.setattr("extendvcc.cards.update_credit_card_address", _bang)  # must NOT be called
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+
+    code = main(
+        [
+            "update-account",
+            "cc_1",
+            "--address1",
+            "1 New Rd",
+            "--city",
+            "Newtown",
+            "--province",
+            "CA",
+            "--postal",
+            "95051",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1  # EXIT_ERROR (declined confirmation)
+    assert "Cancelled." in captured.err

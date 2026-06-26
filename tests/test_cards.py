@@ -1305,6 +1305,21 @@ def test_build_update_credit_card_rejects_thin_get():
         )
 
 
+def test_build_update_credit_card_rejects_thin_plus_extra_key():
+    """A near-thin GET with stray keys but no nested `address` must STILL raise.
+
+    Guards the fail-safe: a denylist of the exact 4-key shape would let
+    `{id,last4,status,displayName,type}` slip through and blank the parent card.
+    The guard requires positive evidence of a full object (nested `address`).
+    """
+    almost = {"id": "cc_x", "last4": "1", "status": "ACTIVE", "displayName": "x", "type": "SOURCE"}
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_x": {"creditCard": almost}})
+    with pytest.raises(PayWithExtendError, match="full card object"):
+        cards.build_update_credit_card_operation(
+            "cc_x", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_x")
+        )
+
+
 def test_update_credit_card_address_overrides_nested_only(monkeypatch, tmp_path):
     """New address lands in the nested object only; flat fields stay stale."""
     _patch_ledger(monkeypatch, tmp_path)

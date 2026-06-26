@@ -551,12 +551,6 @@ def build_update_card_operation(
     }
 
 
-# A GET /creditcards/{id} that returns only these keys is the "thin" list-item
-# shape, not the full card object. Round-tripping it as a PUT body would blank
-# every other field on the parent card, so we refuse it.
-_THIN_CREDIT_CARD_KEYS = frozenset({"id", "last4", "status", "displayName"})
-
-
 def build_update_credit_card_operation(
     credit_card_id: str,
     overrides: dict[str, Any],
@@ -576,18 +570,26 @@ def build_update_credit_card_operation(
     so a full round-trip leaks nothing. Note: a full-object PUT is last-writer-wins
     for the entire object — a concurrent edit to any field would be reverted.
 
+    Safety gate: the PUT echoes back every field we read, so a partial/list-item GET
+    would blank real fields on the parent card (which backs child virtual cards). We
+    require *positive* evidence of a full object — a nested ``address`` mapping, which
+    every full credit-card object carries (per the capture) and the thin list-item
+    shape (``id/last4/status/displayName``) never does. A denylist of the exact thin
+    keyset would let a "thin + one stray key" response slip through and corrupt the
+    card; requiring ``address`` fails safe instead.
+
     Raises:
-        PayWithExtendError: if the GET returns the thin list-item shape (which would
-            make the round-trip unsafe) or an otherwise unrecognizable object.
+        PayWithExtendError: if the GET does not return a full card object (no nested
+            ``address`` mapping), which would make the round-trip unsafe.
     """
     resp = fetcher()
     raw = resp.get("creditCard", resp) if isinstance(resp, dict) else None
     if not isinstance(raw, dict) or "id" not in raw:
         raise PayWithExtendError("unexpected update_credit_card GET response: not a card object")
-    if set(raw.keys()) <= _THIN_CREDIT_CARD_KEYS:
+    if not isinstance(raw.get("address"), dict):
         raise PayWithExtendError(
-            f"GET /creditcards/{credit_card_id} returned a thin object; "
-            "full-object round-trip is unsafe — aborting to avoid blanking the parent card"
+            f"GET /creditcards/{credit_card_id} did not return a full card object "
+            "(no nested `address`); aborting to avoid blanking the parent card"
         )
 
     body = dict(raw)
