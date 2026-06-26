@@ -551,6 +551,145 @@ def build_update_card_operation(
     }
 
 
+def build_update_credit_card_operation(
+    credit_card_id: str,
+    overrides: dict[str, Any],
+    *,
+    fetcher: Callable[[], Any],
+) -> dict[str, Any]:
+    """Shape a ``PUT /creditcards/{id}`` operation via full-object read-modify-write.
+
+    ``fetcher`` performs the read-only GET of the current card. Its result (wrapped
+    in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, then
+    ``overrides`` are applied: a dict-valued override is **merged** one level deep
+    into the existing field (so the nested ``address`` keeps unknown keys like
+    ``countryCode``); any other value replaces.
+
+    Faithful to the captured browser request, which PUTs the whole object and
+    changes only the nested ``address``. The credit-card object carries no PAN/CVC,
+    so a full round-trip leaks nothing. Note: a full-object PUT is last-writer-wins
+    for the entire object — a concurrent edit to any field would be reverted.
+
+    Safety gate: the PUT echoes back every field we read, so a partial/list-item GET
+    would blank real fields on the parent card (which backs child virtual cards). We
+    require *positive* evidence of a full object — a nested ``address`` mapping, which
+    every full credit-card object carries (per the capture) and the thin list-item
+    shape (``id/last4/status/displayName``) never does. A denylist of the exact thin
+    keyset would let a "thin + one stray key" response slip through and corrupt the
+    card; requiring ``address`` fails safe instead.
+
+    Raises:
+        PayWithExtendError: if the GET does not return a full card object (no nested
+            ``address`` mapping), which would make the round-trip unsafe.
+    """
+    resp = fetcher()
+    raw = resp.get("creditCard", resp) if isinstance(resp, dict) else None
+    if not isinstance(raw, dict) or "id" not in raw:
+        raise PayWithExtendError("unexpected update_credit_card GET response: not a card object")
+    if not isinstance(raw.get("address"), dict):
+        raise PayWithExtendError(
+            f"GET /creditcards/{credit_card_id} did not return a full card object "
+            "(no nested `address`); aborting to avoid blanking the parent card"
+        )
+
+    body = dict(raw)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(body.get(key), dict):
+            body[key] = {**body[key], **value}
+        else:
+            body[key] = value
+
+    return {
+        "method": "PUT",
+        "path": f"/creditcards/{credit_card_id}",
+        "body": body,
+        "preview_accuracy": "exact",
+    }
+
+
+_CREDIT_CARD_ADDRESS_REQUIRED = ("address1", "city", "province", "postal")
+
+
+def _require_address_fields(address: dict[str, Any]) -> None:
+    """Raise ValueError naming any missing or empty required billing-address field.
+
+    Shared by the library path and the CLI dry-run so a preview enforces the same
+    contract as a real run (argparse ``required=True`` guarantees presence, not
+    non-emptiness — ``--address1 ""`` must still be rejected).
+    """
+    missing = [f for f in _CREDIT_CARD_ADDRESS_REQUIRED if not address.get(f)]
+    if missing:
+        raise ValueError(f"update_credit_card_address: address missing required field(s): {missing}")
+
+
+def _credit_card_address_overrides(address: dict[str, Any], country: str | None) -> dict[str, Any]:
+    """Build the PUT overrides for an address change (shared by lib + CLI dry-run).
+
+    Returns a nested ``address`` override (merged over the GET's address by the
+    builder). When ``country`` is given it is set both inside the nested address
+    and at the top level, matching where the live object carries it.
+    """
+    new_address: dict[str, Any] = {
+        "address1": address["address1"],
+        "address2": address.get("address2", "") or "",
+        "city": address["city"],
+        "province": address["province"],
+        "postal": address["postal"],
+    }
+    overrides: dict[str, Any] = {"address": new_address}
+    if country is not None:
+        new_address["country"] = country
+        overrides["country"] = country
+    return overrides
+
+
+def update_credit_card_address(
+    credit_card_id: str,
+    address: dict[str, Any],
+    *,
+    country: str | None = None,
+    client: Any = None,
+) -> CreditCard:
+    """Update a parent (SOURCE) credit card's billing address. PUT /creditcards/{id}.
+
+    Full-object read-modify-write: GET the card, override only the nested ``address``
+    object (merged, so unknown keys survive), round-trip every other field unchanged,
+    PUT it back. ``address`` requires ``address1``, ``city``, ``province``, ``postal``
+    and accepts an optional ``address2`` (defaults ``""``). ``postal`` must stay a
+    string so leading-zero ZIPs survive.
+
+    AVS caveat: this updates the *stored* address. Whether that address reaches the
+    issuer's address-verification check at checkout is unverified — confirm against a
+    live transaction before relying on it for AVS.
+
+    Raises:
+        ValueError: if a required address field is missing (before any network call).
+        PayWithExtendError: if the GET returns a thin/unrecognizable object.
+    """
+    _require_address_fields(address)
+
+    c = client or _default_client()
+    overrides = _credit_card_address_overrides(address, country)
+    operation = build_update_credit_card_operation(
+        credit_card_id,
+        overrides,
+        fetcher=lambda: c.get(f"/creditcards/{credit_card_id}"),
+    )
+    payload = operation["body"]
+
+    def _on_success(resp: Any) -> tuple[CreditCard, dict[str, Any]]:
+        credit_card = _parse_credit_card(resp, "update_credit_card_address response")
+        return credit_card, {"credit_card_id": credit_card.id}
+
+    key = f"update-cc:{credit_card_id}"
+    return _ledger_flow(
+        "update-cc",
+        key,
+        lambda: c.put(f"/creditcards/{credit_card_id}", json_body=payload),
+        on_success=_on_success,
+    )
+
+
 def _update_overrides(
     *,
     balance_cents: int | None,

@@ -64,6 +64,29 @@ extendvcc activate <card-id>
 
 Run `extendvcc issuers` to find the `--issuer-id` for your card.
 
+## Update a Parent Card's Billing Address
+
+Change the stored billing address on a parent (SOURCE) credit card:
+
+```bash
+extendvcc update-account cc_2vtDvRzWDB19myGfM9naDD \
+  --address1 "357 Dawson Drive" \
+  --city "Santa Clara" \
+  --province CA \
+  --postal 95051
+```
+
+`--address2` and `--country` are optional; an omitted `--country` keeps the card's
+current value. Preview the exact request body without mutating (does a read-only GET):
+
+```bash
+extendvcc update-account cc_... --address1 "..." --city "..." --province CA --postal 95051 --dry-run
+```
+
+Note: this changes the *stored* billing address on the parent card. Whether it affects
+address verification (AVS) at checkout is issuer-dependent and unverified — confirm
+against a live transaction before relying on it.
+
 ## Create a One-Time Card
 
 ```bash
@@ -109,6 +132,7 @@ extendvcc bulk cards.csv --credit-card-id cc_x --dry-run
 extendvcc cancel <card-id> --dry-run
 extendvcc close <card-id> --dry-run
 extendvcc update <card-id> --balance-cents 9000 --dry-run
+extendvcc update-account <cc-id> --address1 "1 New Rd" --city "Newtown" --province CA --postal 95051 --dry-run
 ```
 
 The would-be request body (or operation descriptor) is printed as JSON to **stdout**;
@@ -176,6 +200,14 @@ card = get_card("card_id_here")
 
 # Reveal card credentials (PAN, CVC, expiry)
 creds = reveal_card("card_id_here")
+
+# Update a parent card's billing address
+from extendvcc import update_credit_card_address
+
+update_credit_card_address(
+    "cc_id_here",
+    {"address1": "357 Dawson Drive", "city": "Santa Clara", "province": "CA", "postal": "95051"},
+)
 ```
 
 See `extendvcc.__init__` for the full list of exported functions and models.

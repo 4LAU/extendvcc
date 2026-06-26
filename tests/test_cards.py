@@ -8,7 +8,7 @@ import pytest
 
 from extendvcc import cards, ledger
 from extendvcc._paths import configure as configure_paths
-from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled
+from extendvcc.client import PayWithExtendAPIError, PayWithExtendDisabled, PayWithExtendError
 
 _BASE_SESSION = {
     "email": "user@example.com",
@@ -1229,6 +1229,244 @@ def test_build_update_card_operation_allowlist_projection():
     assert body["currency"] == "USD"  # allowlist field preserved
     assert op["method"] == "PUT"
     assert op["path"] == "/virtualcards/vc_b"
+
+
+# Synthetic full credit-card GET object. Flat top-level address fields are
+# intentionally STALE relative to the nested `address` object, mirroring the
+# real capture. `countryCode` is an unknown nested key used to prove merge.
+_RAW_CREDIT_CARD = {
+    "id": "cc_synth1",
+    "last4": "1040",
+    "status": "ACTIVE",
+    "displayName": "Parent Card",
+    "issuedAmountCents": 150300,
+    "issuerId": "ii_x",
+    "type": "SOURCE",
+    "country": "US",
+    "address1": "400 Old St",
+    "address2": "",
+    "city": "Oldtown",
+    "province": "NY",
+    "postal": "10001",
+    "address": {
+        "address1": "400 Old St",
+        "address2": "",
+        "city": "Oldtown",
+        "country": "US",
+        "province": "NY",
+        "postal": "10001",
+        "countryCode": "840",
+    },
+}
+_CC_PUT_RESP = {"creditCard": {"id": "cc_synth1", "last4": "1040", "status": "ACTIVE", "displayName": "Parent Card"}}
+
+
+def test_build_update_credit_card_merges_nested_address():
+    """Override merges into the nested `address`; unknown nested keys survive."""
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
+    op = cards.build_update_credit_card_operation(
+        "cc_synth1",
+        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        fetcher=lambda: fake.get("/creditcards/cc_synth1"),
+    )
+    body = op["body"]
+    assert op["method"] == "PUT"
+    assert op["path"] == "/creditcards/cc_synth1"
+    assert body["address"]["address1"] == "1 New Rd"
+    assert body["address"]["city"] == "Newtown"
+    # merge, not replace: the unknown nested key is preserved.
+    assert body["address"]["countryCode"] == "840"
+
+
+def test_build_update_credit_card_leaves_flat_and_other_fields_untouched():
+    """Flat address fields stay stale; non-address fields round-trip unchanged."""
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
+    op = cards.build_update_credit_card_operation(
+        "cc_synth1",
+        {"address": {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"}},
+        fetcher=lambda: fake.get("/creditcards/cc_synth1"),
+    )
+    body = op["body"]
+    # Flat top-level fields are NOT mirrored — still stale, as the browser left them.
+    assert body["address1"] == "400 Old St"
+    assert body["city"] == "Oldtown"
+    # Unrelated field preserved verbatim.
+    assert body["issuedAmountCents"] == 150300
+    assert body["type"] == "SOURCE"
+
+
+def test_build_update_credit_card_rejects_thin_get():
+    """A thin GET (list-item shape) must raise, not silently blank the parent card."""
+    thin = {"id": "cc_thin", "last4": "1", "status": "ACTIVE", "displayName": "x"}
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_thin": {"creditCard": thin}})
+    with pytest.raises(PayWithExtendError):
+        cards.build_update_credit_card_operation(
+            "cc_thin", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_thin")
+        )
+
+
+def test_build_update_credit_card_rejects_thin_plus_extra_key():
+    """A near-thin GET with stray keys but no nested `address` must STILL raise.
+
+    Guards the fail-safe: a denylist of the exact 4-key shape would let
+    `{id,last4,status,displayName,type}` slip through and blank the parent card.
+    The guard requires positive evidence of a full object (nested `address`).
+    """
+    almost = {"id": "cc_x", "last4": "1", "status": "ACTIVE", "displayName": "x", "type": "SOURCE"}
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_x": {"creditCard": almost}})
+    with pytest.raises(PayWithExtendError, match="full card object"):
+        cards.build_update_credit_card_operation(
+            "cc_x", {"address": {"address1": "y"}}, fetcher=lambda: fake.get("/creditcards/cc_x")
+        )
+
+
+def test_update_credit_card_address_overrides_nested_only(monkeypatch, tmp_path):
+    """New address lands in the nested object only; flat fields stay stale."""
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    result = cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake,
+    )
+    path, body = fake.put_calls[0]
+    assert path == "/creditcards/cc_synth1"
+    assert body["address"]["address1"] == "1 New Rd"
+    assert body["address"]["countryCode"] == "840"  # merge preserved
+    assert body["address1"] == "400 Old St"  # flat untouched
+    assert result.id == "cc_synth1"
+    configure_paths()
+
+
+def test_update_credit_card_address_postal_stays_string(monkeypatch, tmp_path):
+    """Leading-zero ZIPs must not be coerced to int anywhere."""
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "MA", "postal": "02134"},
+        client=fake,
+    )
+    _, body = fake.put_calls[0]
+    assert body["address"]["postal"] == "02134"
+    configure_paths()
+
+
+def test_update_credit_card_address_country_set_in_two_places(monkeypatch, tmp_path):
+    """Explicit country updates both nested and top-level; omitted preserves GET value."""
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        country="CA",
+        client=fake,
+    )
+    _, body = fake.put_calls[0]
+    assert body["country"] == "CA"
+    assert body["address"]["country"] == "CA"
+
+    # Omitted country -> GET value preserved.
+    fake2 = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake2,
+    )
+    _, body2 = fake2.put_calls[0]
+    assert body2["country"] == "US"
+    assert body2["address"]["country"] == "US"
+    configure_paths()
+
+
+def test_update_credit_card_address_missing_field_raises(monkeypatch, tmp_path):
+    """A missing required address field fails before any network call."""
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient()
+    with pytest.raises(ValueError, match="address1"):
+        cards.update_credit_card_address(
+            "cc_synth1", {"city": "Newtown", "province": "CA", "postal": "95051"}, client=fake
+        )
+    assert fake.get_calls == []
+    assert fake.put_calls == []
+    configure_paths()
+
+
+def test_update_credit_card_address_ledger_confirmed(monkeypatch, tmp_path):
+    """A successful update writes a pending row and resolves it to confirmed.
+
+    Asserting only `find_pending is None` is too weak — it also passes if
+    record_pending never ran. Read the raw ledger file and prove a confirmed
+    operation row for this key exists (credit-card updates write no card row, so
+    we cannot lean on ledger.query()).
+    """
+    import json as _json
+
+    _patch_ledger(monkeypatch, tmp_path)
+    fake = _MutatingFakeClient(
+        get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
+        put_responses={"/creditcards/cc_synth1": _CC_PUT_RESP},
+    )
+    cards.update_credit_card_address(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        client=fake,
+    )
+    assert ledger.find_pending("update-cc:cc_synth1") is None  # no longer pending
+
+    rows = [_json.loads(line) for line in (tmp_path / "cards.jsonl").read_text().splitlines() if line.strip()]
+    ops = [
+        r
+        for r in rows
+        if r.get("record_type") == "operation"
+        and r.get("correlation_key") == "update-cc:cc_synth1"
+        and r.get("intent") == "update-cc"
+    ]
+    assert len(ops) == 1
+    assert ops[0]["status"] == "confirmed"
+    configure_paths()
+
+
+def test_update_credit_card_address_4xx_marks_failed(monkeypatch, tmp_path):
+    """A 4xx from the PUT marks the pending row failed (retry-safe)."""
+    _patch_ledger(monkeypatch, tmp_path)
+
+    class _Fake4xx(_MutatingFakeClient):
+        def put(self, path, *, json_body=None, **_kw):
+            self.put_calls.append((path, json_body))
+            raise PayWithExtendAPIError("bad request", status_code=400, path=path)
+
+    fake = _Fake4xx(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
+    with pytest.raises(PayWithExtendAPIError):
+        cards.update_credit_card_address(
+            "cc_synth1",
+            {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+            client=fake,
+        )
+    # The pending row was resolved (as failed), so no update-cc rows remain pending.
+    # `find_pending` matches only PENDING rows, so it returns None here — assert via
+    # list_pending, mirroring test_4xx_error_resolves_pending_failed.
+    assert ledger.list_pending(intent="update-cc") == []
+    assert ledger.find_pending("update-cc:cc_synth1") is None
+    configure_paths()
+
+
+def test_update_credit_card_address_is_public():
+    import extendvcc
+
+    assert hasattr(extendvcc, "update_credit_card_address")
 
 
 # ---------------------------------------------------------------------------
