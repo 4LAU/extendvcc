@@ -553,6 +553,56 @@ def _update_dry_run(args: argparse.Namespace, kwargs: dict[str, Any]) -> int:
     return EXIT_OK
 
 
+def _cmd_update_account(args: argparse.Namespace) -> int:
+    from .cards import _require_address_fields, update_credit_card_address
+
+    address = {
+        "address1": args.address1,
+        "address2": getattr(args, "address2", "") or "",
+        "city": args.city,
+        "province": args.province,
+        "postal": args.postal,
+    }
+    country = getattr(args, "country", None)
+
+    # Validate up front so a --dry-run preview enforces the same contract as a real
+    # run (the library path validates too; this covers the dry-run branch below).
+    _require_address_fields(address)
+
+    if getattr(args, "dry_run", False):
+        return _update_account_dry_run(args, address, country)
+
+    _info(f"Updating billing address for {args.id}:")
+    _info(f"  {address['address1']}, {address['city']}, {address['province']} {address['postal']}")
+    if not _confirm("Proceed? [y/N] ", yes=getattr(args, "yes", False)):
+        _info("Cancelled.")
+        return EXIT_ERROR
+
+    card = update_credit_card_address(args.id, address, country=country)
+    if getattr(args, "json", False):
+        print(_json_out(_card_to_dict(card)))
+    else:
+        print(f"Updated: {card.id} (last4={card.last4}, status={card.status.value})")
+    return EXIT_OK
+
+
+def _update_account_dry_run(args: argparse.Namespace, address: dict[str, Any], country: str | None) -> int:
+    """Preview an address update. The read-only GET is allowed (non-destructive) so
+    the merged PUT body is accurate; no mutation is performed."""
+    from .cards import _credit_card_address_overrides, _default_client, build_update_credit_card_operation
+
+    client = _default_client()
+    overrides = _credit_card_address_overrides(address, country)
+    operation = build_update_credit_card_operation(
+        args.id,
+        overrides,
+        fetcher=lambda: client.get(f"/creditcards/{args.id}"),
+    )
+    _info(f"[dry-run] update-account {args.id} — overrides: {overrides}. No mutation made.")
+    print(_json_out(operation["body"]))
+    return EXIT_OK
+
+
 def _bodyless_descriptor(card_id: str, *, action: str, reversible: bool) -> dict[str, Any]:
     """Build a dry-run descriptor for a bodyless PUT (cancel/close)."""
     return {
@@ -782,6 +832,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--valid-to", default=None, help="New expiration date YYYY-MM-DD")
     p.add_argument("--dry-run", action="store_true", help="Preview the merged PUT body (read-only GET, no mutation)")
 
+    # update-account
+    p = sub.add_parser("update-account", help="Update a parent credit card's billing address")
+    p.add_argument("id", help="Credit card ID (cc_...)")
+    p.add_argument("--address1", required=True, help="Billing address line 1")
+    p.add_argument("--address2", default="", help="Billing address line 2")
+    p.add_argument("--city", required=True, help="Billing city")
+    p.add_argument("--province", required=True, help="Billing state/province")
+    p.add_argument("--postal", required=True, help="Billing postal/ZIP code (string; leading zeros kept)")
+    p.add_argument("--country", default=None, help="Country code (defaults to the card's current value)")
+    p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    p.add_argument("--dry-run", action="store_true", help="Preview the merged PUT body (read-only GET, no mutation)")
+
     # cancel
     p = sub.add_parser("cancel", help="Cancel a virtual card (reversible)")
     p.add_argument("id", help="Virtual card ID")
@@ -823,6 +885,7 @@ _COMMANDS: dict[str, Any] = {
     "bulk": _cmd_bulk,
     "reveal": _cmd_reveal,
     "update": _cmd_update,
+    "update-account": _cmd_update_account,
     "cancel": _cmd_cancel,
     "close": _cmd_close,
     "reconcile": _cmd_reconcile,
