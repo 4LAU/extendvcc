@@ -1279,8 +1279,9 @@ def test_build_update_credit_card_merges_nested_address():
     assert body["address"]["countryCode"] == "840"
 
 
-def test_build_update_credit_card_leaves_flat_and_other_fields_untouched():
-    """Flat address fields stay stale; non-address fields round-trip unchanged."""
+def test_build_update_credit_card_mirrors_flat_fields_preserves_others():
+    """Flat address fields are overwritten with the new address (the server's
+    updateAccountRequest validator reads them); non-address fields round-trip."""
     fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}})
     op = cards.build_update_credit_card_address_operation(
         "cc_synth1",
@@ -1289,12 +1290,46 @@ def test_build_update_credit_card_leaves_flat_and_other_fields_untouched():
         fetcher=lambda: fake.get("/creditcards/cc_synth1"),
     )
     body = op["body"]
-    # Flat top-level fields are NOT mirrored — still stale, as the browser left them.
-    assert body["address1"] == "400 Old St"
-    assert body["city"] == "Oldtown"
+    # Flat top-level fields are mirrored to the NEW address, overwriting the stale GET values.
+    assert body["address1"] == "1 New Rd"
+    assert body["city"] == "Newtown"
+    assert body["province"] == "CA"
+    assert body["postal"] == "95051"
     # Unrelated field preserved verbatim.
     assert body["issuedAmountCents"] == 150300
     assert body["type"] == "SOURCE"
+
+
+def test_build_update_credit_card_fills_flat_country_from_nested():
+    """Real cards carry country only inside the nested address (no flat field). The
+    PUT must still populate the flat top-level country, or the validator 422s."""
+    raw = {
+        "id": "cc_synth1",
+        "last4": "1040",
+        "status": "ACTIVE",
+        "displayName": "Parent Card",
+        "issuedAmountCents": 150300,
+        "type": "SOURCE",
+        # No flat top-level address fields and no flat `country` — only nested.
+        "address": {
+            "address1": "400 Old St",
+            "address2": "",
+            "city": "Oldtown",
+            "country": "US",
+            "province": "NY",
+            "postal": "10001",
+        },
+    }
+    fake = _MutatingFakeClient(get_responses={"/creditcards/cc_synth1": {"creditCard": raw}})
+    op = cards.build_update_credit_card_address_operation(
+        "cc_synth1",
+        {"address1": "1 New Rd", "city": "Newtown", "province": "CA", "postal": "95051"},
+        None,
+        fetcher=lambda: fake.get("/creditcards/cc_synth1"),
+    )
+    body = op["body"]
+    assert body["country"] == "US"  # flat country defaulted from nested
+    assert body["address1"] == "1 New Rd"  # flat address fields present
 
 
 def test_build_update_credit_card_rejects_thin_get():
@@ -1322,8 +1357,8 @@ def test_build_update_credit_card_rejects_thin_plus_extra_key():
         )
 
 
-def test_update_credit_card_address_overrides_nested_only(monkeypatch, tmp_path):
-    """New address lands in the nested object only; flat fields stay stale."""
+def test_update_credit_card_address_writes_nested_and_flat(monkeypatch, tmp_path):
+    """New address lands in both the nested object and the flat top-level fields."""
     _patch_ledger(monkeypatch, tmp_path)
     fake = _MutatingFakeClient(
         get_responses={"/creditcards/cc_synth1": {"creditCard": _RAW_CREDIT_CARD}},
@@ -1338,7 +1373,8 @@ def test_update_credit_card_address_overrides_nested_only(monkeypatch, tmp_path)
     assert path == "/creditcards/cc_synth1"
     assert body["address"]["address1"] == "1 New Rd"
     assert body["address"]["countryCode"] == "840"  # merge preserved
-    assert body["address1"] == "400 Old St"  # flat untouched
+    assert body["address1"] == "1 New Rd"  # flat mirrored to new value
+    assert body["city"] == "Newtown"
     assert result.id == "cc_synth1"
     configure_paths()
 

@@ -468,7 +468,7 @@ def test_update_account_dry_run_no_put(monkeypatch, capsys):
     assert code == 0
     body = json.loads(captured.out)
     assert body["address"]["address1"] == "1 New Rd"  # override applied in merged body
-    assert body["address1"] == "400 Old St"  # flat field untouched
+    assert body["address1"] == "1 New Rd"  # flat field mirrored to new value
     assert "[dry-run]" in captured.err
 
 

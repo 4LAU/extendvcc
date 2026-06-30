@@ -41,6 +41,17 @@ over the GET's existing one), and round-trip the stale flat fields untouched —
 as the browser did. Do **not** mirror the new address into the flat fields; that would
 deviate from the only ground-truth capture.
 
+> **Correction (2026-06-30, post-implementation).** The conclusion above was wrong. A
+> live `PUT` against a freshly-enrolled card (`cc_3VQre1Khm4F6IMp5ksdZHE`) whose `GET`
+> carried the address **only** nested (no flat top-level fields) was rejected `422
+> validationFailed` — `updateAccountRequest.address1 must not be blank`, same for
+> `city`/`province`/`postal`, plus a required flat `country`. So the server validates the
+> **flat top-level** fields, not the nested object; the original capture passed only
+> because its flat fields were present-but-stale (non-blank), masking the requirement.
+> The implementation now writes the new address to **both** the nested object and the flat
+> top-level fields, and always populates flat `country` (defaulting to the card's existing
+> value). Do not revert to nested-only.
+
 ## Assumptions & kill list
 
 1. **`GET /creditcards/{id}` returns the full card object** (same shape as the PUT

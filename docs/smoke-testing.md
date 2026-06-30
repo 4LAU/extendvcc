@@ -101,11 +101,14 @@ extendvcc update-account <cc_id> --address1 "1 Test St" --city "Testville" \
   --province CA --postal 95051 --dry-run
 ```
 
-The printed JSON should be a **full** card object with the nested `address` overridden —
-not the thin `{id,last4,status,displayName}` shape that `list_credit_cards` returns. If
-it is thin (or the command raises the thin-GET error), **stop** — the round-trip is
-unsafe and the design must be revisited. `build_update_credit_card_operation` also raises
-on a thin GET as a runtime safety net.
+The printed JSON should be a **full** card object with the new address written to **both**
+the nested `address` object and the flat top-level fields (`address1`/`city`/`province`/
+`postal`/`country`) — not the thin `{id,last4,status,displayName}` shape that
+`list_credit_cards` returns. The server's `updateAccountRequest` validator reads the flat
+fields, so a body carrying only the nested address is rejected with a 422. If the GET is
+thin (or the command raises the thin-GET error), **stop** — the round-trip is unsafe and
+the design must be revisited. `build_update_credit_card_address_operation` also raises on a
+thin GET as a runtime safety net.
 
 ```bash
 # 2. Apply for real, then confirm via `extendvcc accounts` / a live transaction.

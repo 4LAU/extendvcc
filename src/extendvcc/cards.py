@@ -577,16 +577,20 @@ def build_update_credit_card_address_operation(
 
     ``fetcher`` performs the read-only GET of the current card. Its result (wrapped
     in ``creditCard`` or bare) is round-tripped byte-for-byte as the PUT body, with
-    the new ``address`` merged one level deep into the existing nested ``address`` —
-    so unknown keys like ``countryCode`` survive. ``country``, when given, is set
-    both inside the nested address and at the top level, matching where the live
-    object carries it. ``address2`` is preserve-on-omit: written only when the caller
+    the new ``address`` written to **both** the nested ``address`` object (merged one
+    level deep, so unknown keys like ``countryCode`` survive) **and** the flat
+    top-level fields (``address1``/``city``/``province``/``postal``, plus ``address2``
+    when supplied). ``country``, when given, is set inside the nested address and at
+    the top level. ``address2`` is preserve-on-omit: written only when the caller
     supplies the key (pass ``""`` to clear); omit it to keep any existing suite line.
 
-    Faithful to the captured browser request, which PUTs the whole object and
-    changes only the nested ``address``. The credit-card object carries no PAN/CVC,
-    so a full round-trip leaks nothing. Note: a full-object PUT is last-writer-wins
-    for the entire object — a concurrent edit to any field would be reverted.
+    The server's ``updateAccountRequest`` validator reads the FLAT top-level address
+    fields — a PUT carrying only the nested address 422s ("address1 must not be
+    blank") against a card whose GET omits the flat fields. (The original capture
+    passed only because its flat fields were present-but-stale, not blank.) The
+    credit-card object carries no PAN/CVC, so a full round-trip leaks nothing. Note:
+    a full-object PUT is last-writer-wins for the entire object — a concurrent edit to
+    any field would be reverted.
 
     Safety gate: the PUT echoes back every field we read, so a partial/list-item GET
     would blank real fields on the parent card (which backs child virtual cards). We
@@ -616,10 +620,27 @@ def build_update_credit_card_address_operation(
         new_address[field] = address[field]
     if "address2" in address:
         new_address["address2"] = address["address2"] or ""
-    if country is not None:
-        new_address["country"] = country
-        body["country"] = country
+    # The validator requires a flat top-level `country` too; a real card's GET can
+    # carry country only inside the nested address (no flat field), so a PUT that
+    # sets country only when explicitly passed 422s. Default to the card's existing
+    # country (nested, then top-level) so the flat field is always populated.
+    effective_country = country if country is not None else (new_address.get("country") or raw.get("country"))
+    if effective_country is not None:
+        new_address["country"] = effective_country
+        body["country"] = effective_country
     body["address"] = new_address
+
+    # Mirror the new address into the FLAT top-level fields too. The server's
+    # updateAccountRequest validator reads the flat fields, not the nested object:
+    # a PUT carrying only the nested address 422s with "address1 must not be blank"
+    # against a card whose GET omits the flat fields entirely. The original capture
+    # passed only because its flat fields happened to be present (stale but non-blank).
+    # Writing the new values to both places passes validation and is correct
+    # regardless of which location the server ultimately honors for storage.
+    for field in _CREDIT_CARD_ADDRESS_REQUIRED:
+        body[field] = address[field]
+    if "address2" in address:
+        body["address2"] = address["address2"] or ""
 
     return {
         "method": "PUT",
