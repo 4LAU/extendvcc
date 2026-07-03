@@ -1231,6 +1231,60 @@ def test_build_update_card_operation_allowlist_projection():
     assert op["path"] == "/virtualcards/vc_b"
 
 
+# Raw GET for a MONTHLY recurring card. The recurrence object carries both the
+# refill amount (balanceCents) and server-computed read-only fields that PUT
+# rejects (id, nextRecurrenceAt) — the builder must drop the latter.
+_RAW_RECURRING_CARD = {
+    **_RAW_CARD_WITH_EXTRA,
+    "id": "vc_rec",
+    "recurs": True,
+    "balanceCents": 1006,
+    "recurrence": {
+        "balanceCents": 1006,
+        "period": "MONTHLY",
+        "interval": 1,
+        "terminator": "NONE",
+        "byMonthDay": 1,
+        "id": "rec_srv",
+        "nextRecurrenceAt": "2026-08-01T00:00:00.000+0000",
+    },
+}
+
+
+def test_build_update_card_recurring_syncs_refill_and_drops_readonly():
+    """Balance override on a recurring card sets both top-level balanceCents and
+    the recurrence refill; read-only recurrence fields are projected away."""
+    op = cards.build_update_card_operation(
+        "vc_rec",
+        {"balanceCents": 2006},
+        fetcher=lambda: {"virtualCard": _RAW_RECURRING_CARD},
+    )
+    body = op["body"]
+    assert body["recurs"] is True
+    assert body["balanceCents"] == 2006  # current-period limit
+    assert body["recurrence"]["balanceCents"] == 2006  # future refill synced
+    # Read-only server fields must not survive into the PUT.
+    assert "id" not in body["recurrence"]
+    assert "nextRecurrenceAt" not in body["recurrence"]
+    # Schedule fields preserved.
+    assert body["recurrence"]["period"] == "MONTHLY"
+    assert body["recurrence"]["byMonthDay"] == 1
+
+
+def test_build_update_card_recurring_preserves_refill_when_balance_untouched():
+    """Renaming a recurring card (no balance override) keeps the existing refill
+    amount and still strips read-only recurrence fields."""
+    op = cards.build_update_card_operation(
+        "vc_rec",
+        {"displayName": "Renamed"},
+        fetcher=lambda: {"virtualCard": _RAW_RECURRING_CARD},
+    )
+    body = op["body"]
+    assert body["displayName"] == "Renamed"
+    assert body["recurrence"]["balanceCents"] == 1006  # untouched
+    assert "id" not in body["recurrence"]
+
+
 # Synthetic full credit-card GET object. Flat top-level address fields are
 # intentionally STALE relative to the nested `address` object, mirroring the
 # real capture. `countryCode` is an unknown nested key used to prove merge.

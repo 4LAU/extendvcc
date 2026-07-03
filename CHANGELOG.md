@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+---
+
+## [0.2.1] - 2026-07-03
+
+### Fixed
+
+- Updating a recurring virtual card no longer fails with a 422. The read-modify-write in `update`/`update_card` dropped the `recurrence` object while keeping `recurs: true`, so Extend rejected the body. The object is now preserved and projected to a PUT-safe sub-allowlist (schedule fields only; the server-computed read-only fields the GET returns — `id`, `prevRecurrenceAt`, `nextRecurrenceAt`, `currentCount`, `createdAt`, `updatedAt`, `activeUntilDate` — are stripped, since resending them is what triggered the 422). Setting `--balance-cents` on a recurring card now also syncs the recurrence refill amount, so the change applies to both the current period and every future reset instead of reverting to the old amount on the next refill.
+
 ### Added
 
 - `update-account` changes the stored billing address on a parent (SOURCE) credit card, with a matching `update_credit_card_address()` in the public API. It runs a full read-modify-write: GET the card, write the new address into **both** the nested `address` object (merged, so unknown fields survive) and the flat top-level fields (`address1`/`city`/`province`/`postal`/`country`), then PUT the whole object back. The server's `updateAccountRequest` validator reads the flat fields, so a body that set only the nested address is rejected with a 422 (`address1 must not be blank`); flat `country` is always populated, defaulting to the card's existing value when `--country` is omitted. `--dry-run` prints the exact request body from a read-only GET without mutating. `--address2` is preserve-on-omit (pass `""` to clear it), and an omitted `--country` keeps the card's current value. A safety check refuses to PUT when the GET returns a thin list-item shape, which would otherwise blank the parent card that backs your virtual cards. This updates the stored address only; whether it reaches the issuer's address check (AVS) at checkout is unverified.

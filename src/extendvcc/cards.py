@@ -23,11 +23,27 @@ UPDATE_PAYLOAD_FIELDS = (
     "expenseDetails",
     "balanceCents",
     "recurs",
+    "recurrence",
     "receiptAttachmentIds",
     "validTo",
     "currency",
     "receiptRulesExempt",
     "lowLimitAlert",
+)
+
+# Keys of the nested ``recurrence`` object accepted by PUT. The GET response
+# carries server-computed read-only fields (id, nextRecurrenceAt, ...) that PUT
+# rejects, so the object is projected to this sub-allowlist before resending.
+# Mirrors the shape produced by ``_recurrence_payload``.
+RECURRENCE_UPDATE_FIELDS = (
+    "balanceCents",
+    "period",
+    "interval",
+    "terminator",
+    "byMonthDay",
+    "byWeekDay",
+    "until",
+    "count",
 )
 
 _PAGE_SIZE = 100
@@ -540,8 +556,19 @@ def build_update_card_operation(
             sorted(dropped),
         )
 
+    # Project the nested recurrence object to its own PUT allowlist (drops
+    # read-only GET fields that would trigger a 422 on resend).
+    if isinstance(payload.get("recurrence"), dict):
+        payload["recurrence"] = {k: v for k, v in payload["recurrence"].items() if k in RECURRENCE_UPDATE_FIELDS}
+
     # Apply overrides.
     payload.update(overrides)
+
+    # On a recurring card the limit lives in the recurrence object too. A balance
+    # override must set the recurring refill amount as well, else the card resets
+    # to the stale limit next period.
+    if "balanceCents" in overrides and isinstance(payload.get("recurrence"), dict):
+        payload["recurrence"] = {**payload["recurrence"], "balanceCents": overrides["balanceCents"]}
 
     return {
         "method": "PUT",
