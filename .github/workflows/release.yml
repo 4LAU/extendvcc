@@ -29,6 +29,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0 # hatch-vcs derives the version from tag history
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
@@ -53,11 +55,30 @@ jobs:
       - run: ruff format --check src/ tests/
       - run: pytest tests/ -q
 
+  verify-version:
+    # Backstop against tagging without a matching CHANGELOG entry. The package
+    # version comes from the tag (hatch-vcs), so the only human error left is a
+    # tag whose version was never written up. Gates both release and publish.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Assert tag matches the top CHANGELOG section
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag="${REF_NAME#v}"
+          top=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ "$tag" != "$top" ]; then
+            echo "::error::Tag v$tag has no matching CHANGELOG section (top is [$top]). Cut releases with scripts/release.py."
+            exit 1
+          fi
+          echo "OK: tag v$tag matches CHANGELOG [$top]"
+
   release:
-    needs: [build, test]
-    # Run once builds finish even if a platform failed, as long as tests passed,
-    # so a single bad/slow binary never blocks the GitHub release.
-    if: ${{ !cancelled() && needs.test.result == 'success' }}
+    needs: [build, test, verify-version]
+    # Run once builds finish even if a platform failed, as long as tests and the
+    # version guard passed, so a single bad/slow binary never blocks the release.
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.verify-version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -73,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0 # hatch-vcs derives the version from tag history
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
@@ -84,7 +107,7 @@ jobs:
           path: dist/
 
   publish:
-    needs: [build-dist, test]
+    needs: [build-dist, test, verify-version]
     runs-on: ubuntu-latest
     environment: release
     permissions:

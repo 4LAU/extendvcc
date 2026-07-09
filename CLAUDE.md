@@ -29,6 +29,20 @@ All three clean before claiming done.
 
 ---
 
+## Releasing
+
+Cut every release with one command:
+
+```bash
+uv run python scripts/release.py X.Y.Z
+```
+
+It moves the CHANGELOG `[Unreleased]` section into a dated `[X.Y.Z]` section, commits, tags `vX.Y.Z`, and pushes the branch and tag together (`git push --atomic`) — so the tag can never be forgotten. Pushing the tag triggers CI to build binaries and publish to PyPI.
+
+**Never bump a version by hand.** There is no version string in `pyproject.toml`; `hatch-vcs` derives the package version from the git tag, which is the single source of truth. Write release notes under `## [Unreleased]` as you work; the script dates them. Requires a clean tree on an up-to-date `main`.
+
+---
+
 ## Code Practices
 
 **Ask maintainer approval for:** auth flow changes, anything touching card number/CVC handling, public API surface changes, destructive ops. Everything else: proceed.

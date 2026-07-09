@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- The package version is now derived from the git tag via `hatch-vcs` instead of a hardcoded string in `pyproject.toml`. The tag is the single source of truth, so the version PyPI publishes can no longer drift from the tag that triggered the release. Releases are cut with `uv run python scripts/release.py X.Y.Z`, which updates the changelog, commits, tags, and pushes the branch and tag atomically so the tag can't be forgotten. A CI guard blocks any tag whose version has no matching changelog section.
+
 ---
 
 ## [0.2.2] - 2026-07-09
@@ -78,7 +82,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Python API:** public re-exports in `extendvcc.__init__` for programmatic use.
 - **Typed:** `py.typed` marker (PEP 561); type hints throughout.
 
-[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/4LAU/extendvcc/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/4LAU/extendvcc/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/4LAU/extendvcc/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/4LAU/extendvcc/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/4LAU/extendvcc/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/4LAU/extendvcc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/4LAU/extendvcc/releases/tag/v0.1.0
