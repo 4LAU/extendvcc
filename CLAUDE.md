@@ -39,6 +39,8 @@ uv run python scripts/release.py X.Y.Z
 
 It moves the CHANGELOG `[Unreleased]` section into a dated `[X.Y.Z]` section, commits, tags `vX.Y.Z`, and pushes the branch and tag together (`git push --atomic`) — so the tag can never be forgotten. Pushing the tag triggers CI to build binaries and publish to PyPI.
 
+**Then approve the publish.** The `release` GitHub Environment requires a reviewer, so after the tag pushes, the PyPI publish job waits in the Actions tab until the maintainer clicks **Approve**. This is deliberate — nothing reaches PyPI without a human gate. The GitHub release and binaries are not gated; only the PyPI publish is.
+
 **Never bump a version by hand.** There is no version string in `pyproject.toml`; `hatch-vcs` derives the package version from the git tag, which is the single source of truth. Write release notes under `## [Unreleased]` as you work; the script dates them. Requires a clean tree on an up-to-date `main`.
 
 ---
