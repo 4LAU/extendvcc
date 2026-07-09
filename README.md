@@ -121,6 +121,33 @@ extendvcc reveal <card-id> --json-path creds.json
 
 `--json-path` writes the full PAN, CVC, and expiry to a file. Without it, the card number is masked on stdout. `--json` is a separate global flag that controls JSON output format; it does not write a file.
 
+## Credential Storage
+
+After you log in once, the CLI keeps you signed in so you don't retype your
+password every time. Here is exactly what lands on your machine and why it's safe.
+
+The tool stores a session file at `~/.config/extendvcc/paywithextend_session.json`
+(or wherever `EXTENDVCC_STATE_DIR` points). It holds the access and refresh tokens
+Extend hands back after login, plus a remembered-device key. It does **not** contain
+your Extend password. Your password is sent to Extend's login endpoint and never
+written to disk.
+
+The file is created with `0600` permissions, so only your user account can read it.
+Tokens expire and are refreshed automatically. Still, treat the file as sensitive: a
+current access token lets someone act on your Extend account until it expires or you
+delete the session. Don't copy it to shared machines or commit it anywhere.
+
+There is no `logout` command. To sign out on a device, delete the session file:
+
+```bash
+rm ~/.config/extendvcc/paywithextend_session.json
+```
+
+The next command will prompt for a fresh login. If you set `EXTENDVCC_EMAIL`,
+`EXTENDVCC_PASSWORD`, or the IMAP variables for automation (see below), those live in
+your shell environment or secrets manager, not in this file, and the tool never
+persists them.
+
 ## Dry Run
 
 Destructive commands accept `--dry-run` to preview the exact operation without

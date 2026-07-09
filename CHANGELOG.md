@@ -10,6 +10,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ---
 
+## [0.2.2] - 2026-07-09
+
+### Documentation
+
+- README now has a **Credential Storage** section explaining what the CLI persists after login: a `0600` session file at `~/.config/extendvcc/paywithextend_session.json` holding only Extend's access/refresh tokens and a device key, never your password. Documents that there is no `logout` command and that deleting the file signs you out.
+
+---
+
 ## [0.2.1] - 2026-07-03
 
 ### Fixed
