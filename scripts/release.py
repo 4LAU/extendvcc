@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cut a release in one atomic step.
 
-    uv run python scripts/release.py X.Y.Z [--yes] [--allow-empty]
+    uv run python scripts/release.py X.Y.Z [--yes] [--allow-empty] [--no-watch]
 
 What it does:
   1. Move the CHANGELOG "[Unreleased]" section into a dated "[X.Y.Z]" section
@@ -10,6 +10,9 @@ What it does:
   3. Tag `vX.Y.Z` and push the branch and the tag together with
      `git push --atomic` — so the tag can never be pushed without the commit,
      or forgotten after it.
+  4. Watch the CI run for the release commit and report pass/fail (best-effort;
+     needs the `gh` CLI). Pass --no-watch to skip. It watches CI, not the release
+     workflow, whose publish job would otherwise hang on your approval gate.
 
 The package version is NOT stored anywhere in the tree: hatch-vcs derives it from
 the `vX.Y.Z` git tag at build time (see pyproject.toml `[tool.hatch.version]`).
@@ -22,8 +25,10 @@ from __future__ import annotations
 import argparse
 import datetime
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_URL = "https://github.com/4LAU/extendvcc"
@@ -52,6 +57,52 @@ def preflight() -> None:
     run("git", "fetch", "origin", "main", capture=True)
     if run("git", "rev-list", "HEAD..origin/main", capture=True):
         sys.exit("error: local main is behind origin/main; pull first")
+
+
+def watch_ci(sha: str) -> None:
+    """Block until the CI run for this commit finishes, reporting pass/fail.
+
+    Best-effort: the release is already pushed, so a missing gh CLI or a watch
+    error must never fail the release. We watch the CI workflow, not the release
+    one — the release's publish job waits on a required-reviewer gate, which would
+    make the watch hang on your own approval click.
+    """
+    if not shutil.which("gh"):
+        print("note: gh CLI not found; skipping CI watch. Check the Actions tab for status.")
+        return
+    # The push just landed; GitHub takes a few seconds to register the CI run.
+    run_id = ""
+    for _ in range(10):
+        found = subprocess.run(
+            [
+                "gh",
+                "run",
+                "list",
+                "--workflow=ci.yml",
+                "--commit",
+                sha,
+                "--limit",
+                "1",
+                "--json",
+                "databaseId",
+                "--jq",
+                ".[0].databaseId // empty",
+            ],
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        if found:
+            run_id = found
+            break
+        time.sleep(3)
+    if not run_id:
+        print("note: no CI run registered yet for this commit; check the Actions tab.")
+        return
+    print("Watching CI…")
+    if subprocess.run(["gh", "run", "watch", run_id, "--exit-status"]).returncode == 0:
+        print("CI passed.")
+    else:
+        print("CI did NOT pass — check the Actions tab. (The release tag is already pushed.)")
 
 
 def split_unreleased(text: str) -> tuple[str, str, str]:
@@ -100,6 +151,7 @@ def main() -> None:
     parser.add_argument("version", help="new version, e.g. 0.3.0 (no leading 'v')")
     parser.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
     parser.add_argument("--allow-empty", action="store_true", help="permit an empty [Unreleased] section")
+    parser.add_argument("--no-watch", action="store_true", help="don't wait on CI after pushing")
     args = parser.parse_args()
 
     version = args.version.lstrip("v")
@@ -128,6 +180,8 @@ def main() -> None:
     run("git", "tag", f"v{version}")
     run("git", "push", "--atomic", "origin", "main", f"v{version}")
     print(f"Released v{version}. GitHub Actions will build binaries and publish to PyPI.")
+    if not args.no_watch:
+        watch_ci(run("git", "rev-parse", "HEAD", capture=True))
 
 
 if __name__ == "__main__":
