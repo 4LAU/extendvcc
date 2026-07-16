@@ -9,6 +9,7 @@ build/
 .env.*
 .claude/
 .codex/
+CLAUDE.md
 .ruff_cache/
 .pytest_cache/
 .coverage
